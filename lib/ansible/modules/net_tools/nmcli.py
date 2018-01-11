@@ -500,6 +500,7 @@ except ImportError:
     pass
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils._text import to_native
 
 
 class Nmcli(object):
@@ -568,6 +569,7 @@ class Nmcli(object):
         self.priority = module.params['priority']
         self.mode = module.params['mode']
         self.miimon = module.params['miimon']
+        self.primary = module.params['primary']
         self.downdelay = module.params['downdelay']
         self.updelay = module.params['updelay']
         self.arp_interval = module.params['arp_interval']
@@ -642,8 +644,14 @@ class Nmcli(object):
         bus = dbus.SystemBus()
 
         service_name = "org.freedesktop.NetworkManager"
-        proxy = bus.get_object(service_name, "/org/freedesktop/NetworkManager/Settings")
-        settings = dbus.Interface(proxy, "org.freedesktop.NetworkManager.Settings")
+        settings = None
+        try:
+            proxy = bus.get_object(service_name, "/org/freedesktop/NetworkManager/Settings")
+            settings = dbus.Interface(proxy, "org.freedesktop.NetworkManager.Settings")
+        except dbus.Exceptions.DBusException as e:
+            self.module.fail_json(msg="Unable to read Network Manager settings from DBus system bus: %s" % to_native(e),
+                                  details="Please check if NetworkManager is installed and"
+                                          " service network-manager is started.")
         connection_paths = settings.ListConnections()
         connection_list = []
         # List each connection's name, UUID, and type
@@ -817,6 +825,9 @@ class Nmcli(object):
         if self.downdelay is not None:
             cmd.append('arp-ip-target')
             cmd.append(self.arp_ip_target)
+        if self.primary is not None:
+            cmd.append('primary')
+            cmd.append(self.primary)
         return cmd
 
     def modify_connection_bond(self):
@@ -1067,6 +1078,7 @@ def main():
             updelay=dict(required=False, default=None, type='str'),
             arp_interval=dict(required=False, default=None, type='str'),
             arp_ip_target=dict(required=False, default=None, type='str'),
+            primary=dict(required=False, default=None, type='str'),
             # general usage
             mtu=dict(required=False, default=None, type='str'),
             mac=dict(required=False, default=None, type='str'),

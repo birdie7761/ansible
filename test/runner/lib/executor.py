@@ -383,7 +383,7 @@ def network_init(args, internal_targets):
         platform, version = platform_version.split('/', 1)
         platform_target = 'network/%s/' % platform
 
-        if platform_target not in platform_targets and 'network/basics/' not in platform_targets:
+        if platform_target not in platform_targets:
             display.warning('Skipping "%s" because selected tests do not target the "%s" platform.' % (
                 platform_version, platform))
             continue
@@ -436,6 +436,7 @@ def network_inventory(remotes):
     :rtype: str
     """
     groups = dict([(remote.platform, []) for remote in remotes])
+    net = []
 
     for remote in remotes:
         options = dict(
@@ -452,6 +453,10 @@ def network_inventory(remotes):
                 ' '.join('%s="%s"' % (k, options[k]) for k in sorted(options)),
             )
         )
+
+        net.append(remote.platform)
+
+    groups['net:children'] = net
 
     template = ''
 

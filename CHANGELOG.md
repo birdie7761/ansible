@@ -53,6 +53,8 @@ Ansible Changes By Release
   2.9. use `get_checksum: True` with `checksum_algorithm: md5` to return an md5 hash of the file
   under the `checksum` return value.
 * `osx_say` module was renamed into `say`.
+* Task debugger functionality was moved into `StrategyBase`, and extended to allow explicit invocation from use of the `debugger` keyword.
+  The `debug` strategy is still functional, and is now just a trigger to enable this functionality
 
 #### Deprecated Modules (to be removed in 2.9):
 * ec2_ami_find: replaced by ec2_ami_facts
@@ -86,8 +88,8 @@ Ansible Changes By Release
   * aws_kms_facts
   * aws_s3_cors
   * aws_ssm_parameter_store
-  * ec2_asg_lifecycle_hook
   * ec2_ami_facts
+  * ec2_asg_lifecycle_hook
   * ec2_placement_group
   * ec2_placement_group_facts
   * ecs_taskdefinition_facts
@@ -96,13 +98,19 @@ Ansible Changes By Release
 - azure
   * azure_rm_containerregistry
   * azure_rm_image
+  * azure_rm_mysqlserver
+  * azure_rm_postgresqlserver
   * azure_rm_sqlserver
 - cloudscale
   * cloudscale_floating_ip
 - cloudstack
+  * cs_network_offering
   * cs_service_offering
+  * cs_vpn_connection
+  * cs_vpn_customer_gateway
 - digital_ocean
   * digital_ocean_certificate
+  * digital_ocean_floating_ip_facts
   * digital_ocean_sshkey_facts
 - oneandone
   * oneandone_server
@@ -113,12 +121,16 @@ Ansible Changes By Release
   * ovirt_disk_facts
 - spotinst
   * spotinst_aws_elastigroup
+- terraform
+  * terraform
 - vmware
   * vmware_cfg_backup
   * vmware_datastore_facts
   * vmware_guest_powerstate
   * vmware_host_facts
+  * vmware_local_role_manager
 - vultr
+  * vr_account_facts
   * vr_firewall_group
   * vr_firewall_rule
   * vr_server
@@ -127,12 +139,15 @@ Ansible Changes By Release
 #### Clustering
 - k8s
   * k8s_raw
+  * k8s_scale
 - openshift
   * openshift_raw
+  * openshift_scale
 
 #### Database
 - influxdb
   * influxdb_query
+  * influxdb_user
   * influxdb_write
 
 #### Identity
@@ -143,21 +158,36 @@ Ansible Changes By Release
   * keycloak_client
 
 #### Monitoring
+  * grafana_dashboard
+  * grafana_plugin
   * icinga2_host
 - zabbix
   * zabbix_proxy
   * zabbix_template
 
+#### Net Tools
+  * ip_netns
+
 #### Network
 - aci
   * aci_encap_pool
   * aci_encap_pool_range
+- avi
+  * avi_api_version
+  * avi_customipamdnsprofile
+  * avi_errorpagebody
+  * avi_errorpageprofile
+  * avi_gslbservice_patch_member
+  * avi_wafpolicy
 - enos
   * enos_command
   * enos_config
   * enos_facts
 - eos
+  * eos_interface
+  * eos_l3_interface
   * eos_linkagg
+  * eos_lldp
   * eos_static_route
 - f5
   * bigip_asm_policy
@@ -165,6 +195,7 @@ Ansible Changes By Release
   * bigip_device_connectivity
   * bigip_device_httpd
   * bigip_device_trust
+  * bigip_gtm_server
   * bigip_iapplx_package
   * bigip_monitor_https
   * bigip_monitor_snmp_dca
@@ -175,10 +206,16 @@ Ansible Changes By Release
   * bigip_profile_client_ssl
   * bigip_remote_syslog
   * bigip_security_port_list
+  * bigip_software_update
   * bigip_ssl_key
+  * bigip_traffic_group
   * bigip_vcmp_guest
   * bigip_wait
+  * bigiq_regkey_license
+  * bigiq_regkey_pool
 - ios
+  * ios_l3_interface
+  * ios_lldp
   * ios_vlan
 - iosxr
   * iosxr_netconf
@@ -189,7 +226,19 @@ Ansible Changes By Release
 - mlnxos
   * mlnxos_command
   * mlnxos_config
+  * mlnxos_facts
   * mlnxos_interface
+  * mlnxos_l2_interface
+  * mlnxos_l3_interface
+  * mlnxos_linkagg
+  * mlnxos_lldp
+  * mlnxos_lldp_interface
+  * mlnxos_magp
+  * mlnxos_mlag_ipl
+  * mlnxos_mlag_vip
+  * mlnxos_pfc_interface
+  * mlnxos_protocol
+  * mlnxos_vlan
 - netscaler
   * netscaler_nitro_request
 - nso
@@ -199,8 +248,10 @@ Ansible Changes By Release
   * nso_show
   * nso_verify
 - nxos
+  * nxos_l2_interface
   * nxos_l3_interface
   * nxos_linkagg
+  * nxos_lldp
 - radware
   * vdirect_commit
   * vdirect_runnable
@@ -208,6 +259,7 @@ Ansible Changes By Release
   * vyos_vlan
 
 #### Notification
+  * logentries_msg
   * say
   * snow_record
 
@@ -235,10 +287,12 @@ Ansible Changes By Release
 #### System
   * mksysb
   * nosh
+  * service_facts
 
 #### Windows
   * win_audit_policy_system
   * win_audit_rule
+  * win_certificate_store
   * win_disk_facts
   * win_scheduled_task_stat
   * win_whoami
