@@ -35,7 +35,7 @@ import uuid
 import yaml
 
 from collections import MutableMapping, MutableSequence
-from datetime import datetime
+import datetime
 from functools import partial
 from random import Random, SystemRandom, shuffle
 
@@ -55,7 +55,7 @@ from ansible.parsing.yaml.dumper import AnsibleDumper
 from ansible.utils.hashing import md5s, checksum_s
 from ansible.utils.unicode import unicode_wrap
 from ansible.utils.vars import merge_hash
-from ansible.vars.hostvars import HostVars
+from ansible.vars.hostvars import HostVars, HostVarsVars
 
 
 UUID_NAMESPACE_ANSIBLE = uuid.UUID('361E6D51-FAEC-444A-9079-341386DA8E2E')
@@ -67,8 +67,10 @@ class AnsibleJSONEncoder(json.JSONEncoder):
     types like HostVars
     '''
     def default(self, o):
-        if isinstance(o, HostVars):
+        if isinstance(o, (HostVars, HostVarsVars)):
             return dict(o)
+        elif isinstance(o, (datetime.date, datetime.datetime)):
+            return o.isoformat()
         else:
             return super(AnsibleJSONEncoder, self).default(o)
 
@@ -126,7 +128,7 @@ def to_bool(a):
 
 
 def to_datetime(string, format="%Y-%m-%d %H:%M:%S"):
-    return datetime.strptime(string, format)
+    return datetime.datetime.strptime(string, format)
 
 
 def strftime(string_format, second=None):
@@ -233,7 +235,7 @@ def rand(environment, end, start=None, step=None, seed=None):
             start = 0
         if not step:
             step = 1
-        return r.randrange(start, end, step)
+        return r.randrange(start, end + 1, step)
     elif hasattr(end, '__iter__'):
         if start or step:
             raise AnsibleFilterError('start and step can only be used with integer values')
@@ -486,20 +488,17 @@ def flatten(mylist, levels=None):
     return ret
 
 
-def dict_slice(mydict, keys):
-    ''' takes a dictionary and a list of keys and returns a list of values corresponding to those keys, if they exist '''
+def dict_to_list_of_dict_key_value_elements(mydict):
+    ''' takes a dictionary and transforms it into a list of dictionaries,
+        with each having a 'key' and 'value' keys that correspond to the keys and values of the original '''
 
     if not isinstance(mydict, MutableMapping):
-        raise AnsibleFilterError("The slice filter requires a mapping to operate on, got a %s." % type(mydict))
+        raise AnsibleFilterError("dict2items requires a dictionary, got %s instead." % type(mydict))
 
-    if not isinstance(keys, MutableSequence):
-
-        if isinstance(keys, string_types):
-            keys = [keys]
-        else:
-            AnsibleFilterError("The slice filter requires a key or list of keys, got %s instead." % type(keys))
-
-    return [mydict[key] for key in keys if key in mydict]
+    ret = []
+    for key in mydict:
+        ret.append({'key': key, 'value': mydict[key]})
+    return ret
 
 
 class FilterModule(object):
@@ -531,6 +530,7 @@ class FilterModule(object):
             'basename': partial(unicode_wrap, os.path.basename),
             'dirname': partial(unicode_wrap, os.path.dirname),
             'expanduser': partial(unicode_wrap, os.path.expanduser),
+            'expandvars': partial(unicode_wrap, os.path.expandvars),
             'realpath': partial(unicode_wrap, os.path.realpath),
             'relpath': partial(unicode_wrap, os.path.relpath),
             'splitext': partial(unicode_wrap, os.path.splitext),
@@ -588,5 +588,5 @@ class FilterModule(object):
             'combine': combine,
             'extract': extract,
             'flatten': flatten,
-            'slice': dict_slice,
+            'dict2items': dict_to_list_of_dict_key_value_elements,
         }

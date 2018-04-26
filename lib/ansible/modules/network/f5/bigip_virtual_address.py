@@ -18,14 +18,20 @@ module: bigip_virtual_address
 short_description: Manage LTM virtual addresses on a BIG-IP
 description:
   - Manage LTM virtual addresses on a BIG-IP.
-version_added: "2.4"
+version_added: 2.4
 options:
+  name:
+    description:
+      - Name of the virtual address.
+      - If this parameter is not provided, then the value of C(address) will
+        be used.
+    version_added: 2.6
   address:
     description:
       - Virtual address. This value cannot be modified after it is set.
-    required: True
-    aliases:
-      - name
+      - If you never created a virtual address, but did create virtual servers, then
+        a virtual address for each virtual server was created automatically. The name
+        of this virtual address is its IP address value.
   netmask:
     description:
       - Netmask of the provided virtual address. This value cannot be
@@ -100,14 +106,11 @@ options:
       - Specifies whether the system uses route advertisement for this
         virtual address. When disabled, the system does not advertise
         routes for this virtual address.
-    choices:
-      - yes
-      - no
+    type: bool
   partition:
     description:
       - Device partition to manage resources on.
-    required: False
-    default: 'Common'
+    default: Common
     version_added: 2.5
   traffic_group:
     description:
@@ -116,13 +119,10 @@ options:
         will be used.
     version_added: 2.5
 notes:
-  - Requires the f5-sdk Python package on the host. This is as easy as pip
-    install f5-sdk.
   - Requires the netaddr Python package on the host. This is as easy as pip
     install netaddr.
 extends_documentation_fragment: f5
 requirements:
-  - f5-sdk
   - netaddr
 author:
   - Tim Rupp (@caphrim007)
@@ -193,23 +193,41 @@ state:
   sample: disabled
 '''
 
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import env_fallback
+from ansible.module_utils.parsing.convert_bool import BOOLEANS_TRUE
+from ansible.module_utils.parsing.convert_bool import BOOLEANS_FALSE
+
+try:
+    from library.module_utils.network.f5.bigip import HAS_F5SDK
+    from library.module_utils.network.f5.bigip import F5Client
+    from library.module_utils.network.f5.common import F5ModuleError
+    from library.module_utils.network.f5.common import AnsibleF5Parameters
+    from library.module_utils.network.f5.common import cleanup_tokens
+    from library.module_utils.network.f5.common import fq_name
+    from library.module_utils.network.f5.common import f5_argument_spec
+    try:
+        from library.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
+except ImportError:
+    from ansible.module_utils.network.f5.bigip import HAS_F5SDK
+    from ansible.module_utils.network.f5.bigip import F5Client
+    from ansible.module_utils.network.f5.common import F5ModuleError
+    from ansible.module_utils.network.f5.common import AnsibleF5Parameters
+    from ansible.module_utils.network.f5.common import cleanup_tokens
+    from ansible.module_utils.network.f5.common import fq_name
+    from ansible.module_utils.network.f5.common import f5_argument_spec
+    try:
+        from ansible.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
+
 try:
     import netaddr
     HAS_NETADDR = True
 except ImportError:
     HAS_NETADDR = False
-
-from ansible.module_utils.f5_utils import AnsibleF5Client
-from ansible.module_utils.f5_utils import AnsibleF5Parameters
-from ansible.module_utils.f5_utils import HAS_F5SDK
-from ansible.module_utils.f5_utils import F5ModuleError
-from ansible.module_utils.parsing.convert_bool import BOOLEANS_TRUE
-from ansible.module_utils.parsing.convert_bool import BOOLEANS_FALSE
-
-try:
-    from ansible.module_utils.f5_utils import iControlUnexpectedHTTPError
-except ImportError:
-    HAS_F5SDK = False
 
 
 class Parameters(AnsibleF5Parameters):
@@ -226,23 +244,18 @@ class Parameters(AnsibleF5Parameters):
 
     updatables = [
         'use_route_advertisement', 'auto_delete', 'icmp_echo', 'connection_limit',
-        'arp_state', 'enabled', 'advertise_route', 'traffic_group'
+        'arp_state', 'enabled', 'advertise_route', 'traffic_group', 'address'
     ]
 
     returnables = [
         'use_route_advertisement', 'auto_delete', 'icmp_echo', 'connection_limit',
-        'netmask', 'arp_state', 'address', 'state'
+        'netmask', 'arp_state', 'address', 'state', 'traffic_group'
     ]
 
     api_attributes = [
         'routeAdvertisement', 'autoDelete', 'icmpEcho', 'connectionLimit',
         'advertiseRoute', 'arp', 'mask', 'enabled', 'serverScope', 'trafficGroup'
     ]
-
-    def _fqdn_name(self, value):
-        if value is not None and not value.startswith('/'):
-            return '/{0}/{1}'.format(self.partition, value)
-        return value
 
     @property
     def advertise_route(self):
@@ -334,7 +347,7 @@ class Parameters(AnsibleF5Parameters):
         if self._values['traffic_group'] is None:
             return None
         else:
-            result = self._fqdn_name(self._values['traffic_group'])
+            result = fq_name(self.partition, self._values['traffic_group'])
         if result.startswith('/Common/'):
             return result
         else:
@@ -349,19 +362,28 @@ class Parameters(AnsibleF5Parameters):
         result = self._filter_params(result)
         return result
 
-    def api_params(self):
-        result = {}
-        for api_attribute in self.api_attributes:
-            if api_attribute in self.api_map:
-                result[api_attribute] = getattr(
-                    self, self.api_map[api_attribute])
-            else:
-                result[api_attribute] = getattr(self, api_attribute)
-        result = self._filter_params(result)
-        return result
+
+class ApiParameters(Parameters):
+    pass
+
+
+class ModuleParameters(Parameters):
+    @property
+    def name(self):
+        if self._values['name'] is None:
+            return str(self.address)
+        return self._values['name']
 
 
 class Changes(Parameters):
+    pass
+
+
+class UsableChanges(Changes):
+    pass
+
+
+class ReportableChanges(Changes):
     pass
 
 
@@ -393,11 +415,12 @@ class Difference(object):
 
 
 class ModuleManager(object):
-    def __init__(self, client):
-        self.client = client
+    def __init__(self, *args, **kwargs):
+        self.module = kwargs.get('module', None)
+        self.client = kwargs.get('client', None)
         self.have = None
-        self.want = Parameters(self.client.module.params)
-        self.changes = Changes()
+        self.want = ModuleParameters(client=self.client, params=self.module.params)
+        self.changes = UsableChanges()
 
     def _set_changed_options(self):
         changed = {}
@@ -405,7 +428,7 @@ class ModuleManager(object):
             if getattr(self.want, key) is not None:
                 changed[key] = getattr(self.want, key)
         if changed:
-            self.changes = Changes(changed)
+            self.changes = UsableChanges(params=changed)
 
     def _update_changed_options(self):
         diff = Difference(self.want, self.have)
@@ -421,7 +444,7 @@ class ModuleManager(object):
                 else:
                     changed[k] = change
         if changed:
-            self.changes = Changes(changed)
+            self.changes = UsableChanges(params=changed)
             return True
         return False
 
@@ -463,15 +486,15 @@ class ModuleManager(object):
 
     def read_current_from_device(self):
         resource = self.client.api.tm.ltm.virtual_address_s.virtual_address.load(
-            name=self.want.address,
+            name=self.want.name,
             partition=self.want.partition
         )
         result = resource.attrs
-        return Parameters(result)
+        return ApiParameters(params=result)
 
     def exists(self):
         result = self.client.api.tm.ltm.virtual_address_s.virtual_address.exists(
-            name=self.want.address,
+            name=self.want.name,
             partition=self.want.partition
         )
         return result
@@ -481,26 +504,26 @@ class ModuleManager(object):
         if self.want.netmask is not None:
             if self.have.netmask != self.want.netmask:
                 raise F5ModuleError(
-                    "The netmask cannot be changed. Delete and recreate"
+                    "The netmask cannot be changed. Delete and recreate "
                     "the virtual address if you need to do this."
                 )
         if self.want.address is not None:
             if self.have.address != self.want.address:
                 raise F5ModuleError(
-                    "The address cannot be changed. Delete and recreate"
+                    "The address cannot be changed. Delete and recreate "
                     "the virtual address if you need to do this."
                 )
         if not self.should_update():
             return False
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.update_on_device()
         return True
 
     def update_on_device(self):
-        params = self.want.api_params()
+        params = self.changes.api_params()
         resource = self.client.api.tm.ltm.virtual_address_s.virtual_address.load(
-            name=self.want.address,
+            name=self.want.name,
             partition=self.want.partition
         )
         resource.modify(**params)
@@ -509,7 +532,7 @@ class ModuleManager(object):
         self._set_changed_options()
         if self.want.traffic_group is None:
             self.want.update({'traffic_group': '/Common/traffic-group-1'})
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.create_on_device()
         if self.exists():
@@ -518,16 +541,16 @@ class ModuleManager(object):
             raise F5ModuleError("Failed to create the virtual address")
 
     def create_on_device(self):
-        params = self.want.api_params()
+        params = self.changes.api_params()
         self.client.api.tm.ltm.virtual_address_s.virtual_address.create(
-            name=self.want.address,
+            name=self.want.name,
             partition=self.want.partition,
             address=self.want.address,
             **params
         )
 
     def remove(self):
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.remove_from_device()
         if self.exists():
@@ -536,7 +559,7 @@ class ModuleManager(object):
 
     def remove_from_device(self):
         resource = self.client.api.tm.ltm.virtual_address_s.virtual_address.load(
-            name=self.want.address,
+            name=self.want.name,
             partition=self.want.partition
         )
         resource.delete()
@@ -545,16 +568,13 @@ class ModuleManager(object):
 class ArgumentSpec(object):
     def __init__(self):
         self.supports_check_mode = True
-        self.argument_spec = dict(
+        argument_spec = dict(
             state=dict(
                 default='present',
                 choices=['present', 'absent', 'disabled', 'enabled']
             ),
-            address=dict(
-                type='str',
-                required=True,
-                aliases=['name']
-            ),
+            name=dict(),
+            address=dict(),
             netmask=dict(
                 type='str',
                 default='255.255.255.255',
@@ -577,29 +597,41 @@ class ArgumentSpec(object):
             use_route_advertisement=dict(
                 type='bool'
             ),
-            traffic_group=dict()
+            traffic_group=dict(),
+            partition=dict(
+                default='Common',
+                fallback=(env_fallback, ['F5_PARTITION'])
+            )
         )
-        self.f5_product_name = 'bigip'
+        self.argument_spec = {}
+        self.argument_spec.update(f5_argument_spec)
+        self.argument_spec.update(argument_spec)
+        self.required_one_of = [
+            ['name', 'address']
+        ]
 
 
 def main():
-    if not HAS_F5SDK:
-        raise F5ModuleError("The python f5-sdk module is required")
-
     spec = ArgumentSpec()
 
-    client = AnsibleF5Client(
+    module = AnsibleModule(
         argument_spec=spec.argument_spec,
-        supports_check_mode=spec.supports_check_mode,
-        f5_product_name=spec.f5_product_name
+        supports_check_mode=spec.supports_check_mode
     )
+    if not HAS_F5SDK:
+        module.fail_json(msg="The python f5-sdk module is required")
+    if not HAS_NETADDR:
+        module.fail_json(msg="The python netaddr module is required")
 
     try:
-        mm = ModuleManager(client)
+        client = F5Client(**module.params)
+        mm = ModuleManager(module=module, client=client)
         results = mm.exec_module()
-        client.module.exit_json(**results)
-    except F5ModuleError as e:
-        client.module.fail_json(msg=str(e))
+        cleanup_tokens(client)
+        module.exit_json(**results)
+    except F5ModuleError as ex:
+        cleanup_tokens(client)
+        module.fail_json(msg=str(ex))
 
 
 if __name__ == '__main__':

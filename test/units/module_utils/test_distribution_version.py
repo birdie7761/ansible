@@ -378,6 +378,34 @@ BUG_REPORT_URL="http://bugs.debian.org/"
         }
     },
     {
+        'name': "SteamOS 2.0",
+        'input': {
+            '/etc/os-release': """PRETTY_NAME="SteamOS GNU/Linux 2.0 (brewmaster)"
+NAME="SteamOS GNU/Linux"
+VERSION_ID="2"
+VERSION="2 (brewmaster)"
+ID=steamos
+ID_LIKE=debian
+HOME_URL="http://www.steampowered.com/"
+SUPPORT_URL="http://support.steampowered.com/"
+BUG_REPORT_URL="http://support.steampowered.com/"
+""",
+            '/etc/lsb-release': """DISTRIB_ID=SteamOS
+DISTRIB_RELEASE=2.0
+DISTRIB_CODENAME=brewmaster
+DISTRIB_DESCRIPTION="SteamOS 2.0"
+"""
+        },
+        'platform.dist': ('Steamos', '2.0', 'brewmaster'),
+        'result': {
+            'distribution': u'SteamOS',
+            'distribution_major_version': u'2',
+            'distribution_release': u'brewmaster',
+            "os_family": "Debian",
+            'distribution_version': u'2.0'
+        }
+    },
+    {
         "platform.dist": [
             "Ubuntu",
             "16.04",
@@ -836,6 +864,37 @@ DISTRIB_DESCRIPTION="CoreOS 976.0.0 (Coeur Rouge)"
             "distribution_major_version": "NA",
             "os_family": "Archlinux",
             "distribution_version": "NA"
+        }
+    },
+
+    # ClearLinux https://github.com/ansible/ansible/issues/31501#issuecomment-340861535
+    {
+        "platform.dist": [
+            "Clear Linux OS for Intel Architecture",
+            "18450",
+            "clear-linux-os"
+        ],
+        "input": {
+            "/usr/lib/os-release": '''
+NAME="Clear Linux OS for Intel Architecture"
+VERSION=1
+ID=clear-linux-os
+VERSION_ID=18450
+PRETTY_NAME="Clear Linux OS for Intel Architecture"
+ANSI_COLOR="1;35"
+HOME_URL="https://clearlinux.org"
+SUPPORT_URL="https://clearlinux.org"
+BUG_REPORT_URL="mailto:dev@lists.clearlinux.org"
+PRIVACY_POLICY_URL="http://www.intel.com/privacy"
+'''
+        },
+        "name": "Clear Linux OS for Intel Architecture 1",
+        "result": {
+            "distribution_release": "clear-linux-os",
+            "distribution": "ClearLinux",
+            "distribution_major_version": "18450",
+            "os_family": "ClearLinux",
+            "distribution_version": "18450"
         }
     },
 

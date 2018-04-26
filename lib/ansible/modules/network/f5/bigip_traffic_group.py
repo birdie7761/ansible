@@ -18,17 +18,36 @@ module: bigip_traffic_group
 short_description: Manages traffic groups on BIG-IP
 description:
   - Supports managing traffic groups and their attributes on a BIG-IP.
-version_added: "2.5"
+version_added: 2.5
 options:
   name:
     description:
       - The name of the traffic group.
     required: True
-notes:
-  - Requires the f5-sdk Python package on the host. This is as easy as
-    C(pip install f5-sdk).
-requirements:
-  - f5-sdk >= 3.0.5
+  partition:
+    description:
+      - Device partition to manage resources on.
+    default: Common
+  state:
+    description:
+      - When C(present), ensures that the traffic group exists.
+      - When C(absent), ensures the traffic group is removed.
+    default: present
+    choices:
+      - present
+      - absent
+  mac_address:
+    description:
+      - Specifies the floating Media Access Control (MAC) address associated with the floating IP addresses
+        defined for a traffic group.
+      - Primarily, a MAC masquerade address minimizes ARP communications or dropped packets as a result of failover.
+      - A MAC masquerade address ensures that any traffic destined for a specific traffic group reaches an available
+        device after failover, which happens because along with the traffic group, the MAC masquerade address floats
+        to the available device.
+      - Without a MAC masquerade address, the sending host must learn the MAC address for a newly-active device,
+        either by sending an ARP request or by relying on the gratuitous ARP from the newly-active device.
+      - To unset the MAC address, specify an empty value (C("")) to this parameter.
+    version_added: 2.6
 extends_documentation_fragment: f5
 author:
   - Tim Rupp (@caphrim007)
@@ -49,66 +68,51 @@ RETURN = r'''
 # only common fields returned
 '''
 
-
-from ansible.module_utils.f5_utils import AnsibleF5Client
-from ansible.module_utils.f5_utils import AnsibleF5Parameters
-from ansible.module_utils.f5_utils import HAS_F5SDK
-from ansible.module_utils.f5_utils import F5ModuleError
-from ansible.module_utils.six import iteritems
-from collections import defaultdict
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import env_fallback
 
 try:
-    from ansible.module_utils.f5_utils import iControlUnexpectedHTTPError
+    from library.module_utils.network.f5.bigip import HAS_F5SDK
+    from library.module_utils.network.f5.bigip import F5Client
+    from library.module_utils.network.f5.common import F5ModuleError
+    from library.module_utils.network.f5.common import AnsibleF5Parameters
+    from library.module_utils.network.f5.common import cleanup_tokens
+    from library.module_utils.network.f5.common import f5_argument_spec
+
+    try:
+        from library.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
 except ImportError:
-    HAS_F5SDK = False
+    from ansible.module_utils.network.f5.bigip import HAS_F5SDK
+    from ansible.module_utils.network.f5.bigip import F5Client
+    from ansible.module_utils.network.f5.common import F5ModuleError
+    from ansible.module_utils.network.f5.common import AnsibleF5Parameters
+    from ansible.module_utils.network.f5.common import cleanup_tokens
+    from ansible.module_utils.network.f5.common import f5_argument_spec
+
+    try:
+        from ansible.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
 
 
 class Parameters(AnsibleF5Parameters):
     api_map = {
-
+        'mac': 'mac_address'
     }
 
     api_attributes = [
-
+        'mac'
     ]
 
     returnables = [
-
+        'mac_address'
     ]
 
     updatables = [
-
+        'mac_address'
     ]
-
-    def __init__(self, params=None):
-        self._values = defaultdict(lambda: None)
-        self._values['__warnings'] = []
-        if params:
-            self.update(params=params)
-
-    def update(self, params=None):
-        if params:
-            for k, v in iteritems(params):
-                if self.api_map is not None and k in self.api_map:
-                    map_key = self.api_map[k]
-                else:
-                    map_key = k
-
-                # Handle weird API parameters like `dns.proxy.__iter__` by
-                # using a map provided by the module developer
-                class_attr = getattr(type(self), map_key, None)
-                if isinstance(class_attr, property):
-                    # There is a mapped value for the api_map key
-                    if class_attr.fset is None:
-                        # If the mapped value does not have
-                        # an associated setter
-                        self._values[map_key] = v
-                    else:
-                        # The mapped value has a setter
-                        setattr(self, map_key, v)
-                else:
-                    # If the mapped value is not a @property
-                    self._values[map_key] = v
 
     def to_return(self):
         result = {}
@@ -120,15 +124,19 @@ class Parameters(AnsibleF5Parameters):
             pass
         return result
 
-    def api_params(self):
-        result = {}
-        for api_attribute in self.api_attributes:
-            if self.api_map is not None and api_attribute in self.api_map:
-                result[api_attribute] = getattr(self, self.api_map[api_attribute])
-            else:
-                result[api_attribute] = getattr(self, api_attribute)
-        result = self._filter_params(result)
-        return result
+
+class ApiParameters(Parameters):
+    pass
+
+
+class ModuleParameters(Parameters):
+    @property
+    def mac_address(self):
+        if self._values['mac_address'] is None:
+            return None
+        if self._values['mac_address'] == '':
+            return 'none'
+        return self._values['mac_address']
 
 
 class Changes(Parameters):
@@ -164,9 +172,10 @@ class Difference(object):
 
 
 class ModuleManager(object):
-    def __init__(self, client):
-        self.client = client
-        self.want = Parameters(self.client.module.params)
+    def __init__(self, *args, **kwargs):
+        self.module = kwargs.get('module', None)
+        self.client = kwargs.get('client', None)
+        self.want = ModuleParameters(params=self.module.params)
         self.changes = Changes()
 
     def _set_changed_options(self):
@@ -175,38 +184,9 @@ class ModuleManager(object):
             if getattr(self.want, key) is not None:
                 changed[key] = getattr(self.want, key)
         if changed:
-            self.changes = Changes(changed)
+            self.changes = Changes(params=changed)
 
     def _update_changed_options(self):
-        """Sets the changed updatables when updating a resource
-
-        A module needs to know what changed to determine whether to update
-        a resource (or set of resources). This method accomplishes this by
-        invoking the Difference engine code.
-
-        Each parameter in the `Parameter` class' `updatables` array will be
-        given to the Difference engine's `compare` method. This is done in the
-        order the updatables are listed in the array.
-
-        The `compare` method updates the `changes` dictionary if the following
-        way,
-
-        * If `None` is returned, a change will not be registered.
-        * If a dictionary is returned, the `changes` dictionary will be updated
-          with the values in what was returned.
-        * Otherwise, the `changes` dictionary's key (the parameter being
-          compared) will be set to the value that is returned by `compare`
-
-        The dictionary behavior is in place to allow you to change the key
-        that is set in the `changes` dictionary. There are frequently cases
-        where there is not a clean API map that can be set, nor a way to
-        otherwise allow you to change the attribute name of the resource being
-        updated before it is sent off to the remote device. Using a dictionary
-        return value of `compare` allows you to do this.
-
-        Returns:
-            bool: True when changes are present. False otherwise.
-        """
         diff = Difference(self.want, self.have)
         updatables = Parameters.updatables
         changed = dict()
@@ -220,7 +200,7 @@ class ModuleManager(object):
                 else:
                     changed[k] = change
         if changed:
-            self.changes = Changes(changed)
+            self.changes = Changes(params=changed)
             return True
         return False
 
@@ -252,7 +232,7 @@ class ModuleManager(object):
     def _announce_deprecations(self, result):
         warnings = result.pop('__warnings', [])
         for warning in warnings:
-            self.client.module.deprecate(
+            self.module.deprecate(
                 msg=warning['msg'],
                 version=warning['version']
             )
@@ -274,13 +254,13 @@ class ModuleManager(object):
         self.have = self.read_current_from_device()
         if not self.should_update():
             return False
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.update_on_device()
         return True
 
     def remove(self):
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.remove_from_device()
         if self.exists():
@@ -293,7 +273,7 @@ class ModuleManager(object):
             raise F5ModuleError(
                 "Traffic groups can only be created in the /Common partition"
             )
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.create_on_device()
         return True
@@ -333,49 +313,45 @@ class ModuleManager(object):
             partition=self.want.partition
         )
         result = resource.attrs
-        return Parameters(result)
+        return ApiParameters(params=result)
 
 
 class ArgumentSpec(object):
     def __init__(self):
         self.supports_check_mode = True
-        self.argument_spec = dict(
+        argument_spec = dict(
             name=dict(required=True),
-            state=dict(default='present', choices=['absent', 'present'])
+            state=dict(default='present', choices=['absent', 'present']),
+            partition=dict(
+                default='Common',
+                fallback=(env_fallback, ['F5_PARTITION'])
+            ),
+            mac_address=dict()
         )
-        self.f5_product_name = 'bigip'
-
-
-def cleanup_tokens(client):
-    try:
-        resource = client.api.shared.authz.tokens_s.token.load(
-            name=client.api.icrs.token
-        )
-        resource.delete()
-    except Exception:
-        pass
+        self.argument_spec = {}
+        self.argument_spec.update(f5_argument_spec)
+        self.argument_spec.update(argument_spec)
 
 
 def main():
-    if not HAS_F5SDK:
-        raise F5ModuleError("The python f5-sdk module is required")
-
     spec = ArgumentSpec()
 
-    client = AnsibleF5Client(
+    module = AnsibleModule(
         argument_spec=spec.argument_spec,
-        supports_check_mode=spec.supports_check_mode,
-        f5_product_name=spec.f5_product_name
+        supports_check_mode=spec.supports_check_mode
     )
+    if not HAS_F5SDK:
+        module.fail_json(msg="The python f5-sdk module is required")
 
     try:
-        mm = ModuleManager(client)
+        client = F5Client(**module.params)
+        mm = ModuleManager(module=module, client=client)
         results = mm.exec_module()
         cleanup_tokens(client)
-        client.module.exit_json(**results)
-    except F5ModuleError as e:
+        module.exit_json(**results)
+    except F5ModuleError as ex:
         cleanup_tokens(client)
-        client.module.fail_json(msg=str(e))
+        module.fail_json(msg=str(ex))
 
 
 if __name__ == '__main__':

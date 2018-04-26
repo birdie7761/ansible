@@ -64,7 +64,6 @@ class KubernetesLookup(object):
         self.connection = {}
 
     def run(self, terms, variables=None, **kwargs):
-        self.mylog('Here!')
         self.kind = kwargs.get('kind')
         self.name = kwargs.get('resource_name')
         self.namespace = kwargs.get('namespace')
@@ -89,8 +88,12 @@ class KubernetesLookup(object):
         self.kind = to_snake(self.kind)
         self.helper = self.get_helper(self.api_version, self.kind)
 
+        auth_args = ('host', 'api_key', 'kubeconfig', 'context', 'username', 'password',
+                     'cert_file', 'key_file', 'ssl_ca_cert', 'verify_ssl')
+
         for arg in AUTH_ARG_SPEC:
-            self.connection[arg] = kwargs.get(arg)
+            if arg in auth_args and kwargs.get(arg) is not None:
+                self.connection[arg] = kwargs.get(arg)
 
         try:
             self.helper.set_client_config(**self.connection)
@@ -100,14 +103,9 @@ class KubernetesLookup(object):
             )
 
         if self.name:
-            self.mylog("Calling get_object()")
             return self.get_object()
 
         return self.list_objects()
-
-    def mylog(self, msg):
-        with open('loggit.txt', 'a') as f:
-            f.write(msg + '\n')
 
     def get_helper(self, api_version, kind):
         try:
@@ -144,7 +142,6 @@ class KubernetesLookup(object):
             result = self.helper.get_object(self.name, self.namespace)
         except KubernetesException as exc:
             raise Exception('Failed to retrieve requested object: {0}'.format(exc.message))
-        self.mylog("Got restult")
         response = []
         if result is not None:
             # Convert Datetime objects to ISO format

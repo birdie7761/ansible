@@ -66,7 +66,6 @@ EXAMPLES = '''
                 addr:  10.30.10.66
                 type: V4
               ratio: 3
-      api_version: 16.4
   - name: Patch GSLB Service to delete an existing member
     avi_gslbservice_patch_member:
       controller: "{{ controller }}"
@@ -113,12 +112,12 @@ from copy import deepcopy
 
 HAS_AVI = True
 try:
+    from ansible.module_utils.network.avi.avi import (
+        avi_common_argument_spec, HAS_AVI)
     from avi.sdk.avi_api import ApiSession
     from avi.sdk.utils.ansible_utils import (
         avi_obj_cmp, cleanup_absent_fields, ansible_return,
         AviCheckModeResponse, AviCredentials)
-    from ansible.module_utils.network.avi.avi import (
-        avi_common_argument_spec, HAS_AVI)
 except ImportError:
     HAS_AVI = False
 

@@ -19,7 +19,7 @@ description:
   - This module configures the timezone setting, both of the system clock and of the hardware clock. If you want to set up the NTP, use M(service) module.
   - It is recommended to restart C(crond) after changing the timezone, otherwise the jobs may run at the wrong time.
   - Several different tools are used depending on the OS/Distribution involved.
-    For Linux it can use C(timedatectl) or edit C(/etc/sysconfig/clock) or C(/etc/timezone) andC(hwclock).
+    For Linux it can use C(timedatectl) or edit C(/etc/sysconfig/clock) or C(/etc/timezone) and C(hwclock).
     On SmartOS, C(sm-set-timezone), for macOS, C(systemsetup), for BSD, C(/etc/localtime) is modified.
   - As of version 2.3 support was added for SmartOS and BSDs.
   - As of version 2.4 support was added for macOS.
@@ -336,16 +336,15 @@ class NosystemdTimezone(Timezone):
         # Distribution-specific configurations
         if self.module.get_bin_path('dpkg-reconfigure') is not None:
             # Debian/Ubuntu
-            # With additional hack for https://bugs.launchpad.net/ubuntu/+source/tzdata/+bug/1554806
-            self.update_timezone = ['rm -f /etc/localtime', '%s --frontend noninteractive tzdata' %
-                                    self.module.get_bin_path('dpkg-reconfigure', required=True)]
+            self.update_timezone = ['%s -sf %s /etc/localtime' % (self.module.get_bin_path('ln', required=True), tzfile),
+                                    '%s --frontend noninteractive tzdata' % self.module.get_bin_path('dpkg-reconfigure', required=True)]
             self.conf_files['name'] = '/etc/timezone'
             self.allow_no_file['name'] = True
             self.conf_files['hwclock'] = '/etc/default/rcS'
             self.regexps['name'] = re.compile(r'^([^\s]+)', re.MULTILINE)
             self.tzline_format = '%s\n'
         else:
-            # RHEL/CentOS
+            # RHEL/CentOS/SUSE
             if self.module.get_bin_path('tzdata-update') is not None:
                 self.update_timezone = [self.module.get_bin_path('tzdata-update', required=True)]
                 self.allow_no_file['name'] = True
@@ -354,8 +353,19 @@ class NosystemdTimezone(Timezone):
             #   self.allow_no_file['name'] = False <- this is default behavior
             self.conf_files['name'] = '/etc/sysconfig/clock'
             self.conf_files['hwclock'] = '/etc/sysconfig/clock'
-            self.regexps['name'] = re.compile(r'^ZONE\s*=\s*"?([^"\s]+)"?', re.MULTILINE)
-            self.tzline_format = 'ZONE="%s"\n'
+            # The key for timezone might be `ZONE` or `TIMEZONE`
+            # (the former is used in RHEL/CentOS and the latter is used in SUSE linux).
+            # So check the content of /etc/sysconfig/clock and decide which key to use.
+            with open(self.conf_files['name'], mode='r') as f:
+                sysconfig_clock = f.read()
+            if re.search(r'^TIMEZONE\s*=', sysconfig_clock, re.MULTILINE):
+                # For SUSE
+                self.regexps['name'] = re.compile(r'^TIMEZONE\s*=\s*"?([^"\s]+)"?', re.MULTILINE)
+                self.tzline_format = 'TIMEZONE="%s"\n'
+            else:
+                # For RHEL/CentOS
+                self.regexps['name'] = re.compile(r'^ZONE\s*=\s*"?([^"\s]+)"?', re.MULTILINE)
+                self.tzline_format = 'ZONE="%s"\n'
 
     def _allow_ioerror(self, err, key):
         # In some cases, even if the target file does not exist,

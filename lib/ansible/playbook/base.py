@@ -152,6 +152,9 @@ class Base(with_metaclass(BaseMeta, object)):
     # variables
     _vars = FieldAttribute(isa='dict', priority=100, inherit=False)
 
+    # module default params
+    _module_defaults = FieldAttribute(isa='list', extend=True, prepend=True)
+
     # flags and misc. settings
     _environment = FieldAttribute(isa='list', extend=True, prepend=True)
     _no_log = FieldAttribute(isa='bool')
@@ -170,8 +173,6 @@ class Base(with_metaclass(BaseMeta, object)):
         'sudo', 'sudo_user', 'sudo_pass', 'sudo_exe', 'sudo_flags',
         'su', 'su_user', 'su_pass', 'su_exe', 'su_flags',
     ]
-
-    _inheritable = True
 
     def __init__(self):
 

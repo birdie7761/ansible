@@ -12,8 +12,8 @@ from lib.util import (
     ApplicationError,
     display,
     raw_command,
-    find_pip,
     get_docker_completion,
+    generate_pip_command,
 )
 
 from lib.delegation import (
@@ -25,10 +25,8 @@ from lib.executor import (
     command_network_integration,
     command_windows_integration,
     command_units,
-    command_compile,
     command_shell,
     SUPPORTED_PYTHON_VERSIONS,
-    COMPILE_PYTHON_VERSIONS,
     ApplicationWarning,
     Delegate,
     generate_pip_install,
@@ -42,7 +40,6 @@ from lib.config import (
     NetworkIntegrationConfig,
     SanityConfig,
     UnitsConfig,
-    CompileConfig,
     ShellConfig,
 )
 
@@ -58,7 +55,6 @@ from lib.target import (
     walk_network_integration_targets,
     walk_windows_integration_targets,
     walk_units_targets,
-    walk_compile_targets,
     walk_sanity_targets,
 )
 
@@ -83,6 +79,8 @@ def main():
         args = parse_args()
         config = args.config(args)
         display.verbosity = config.verbosity
+        display.truncate = config.truncate
+        display.redact = config.redact
         display.color = config.color
         display.info_stderr = (isinstance(config, SanityConfig) and config.lint) or (isinstance(config, IntegrationConfig) and config.list_targets)
         check_startup()
@@ -114,7 +112,7 @@ def parse_args():
     except ImportError:
         if '--requirements' not in sys.argv:
             raise
-        raw_command(generate_pip_install(find_pip(), 'ansible-test'))
+        raw_command(generate_pip_install(generate_pip_command(sys.executable), 'ansible-test'))
         import argparse
 
     try:
@@ -152,6 +150,18 @@ def parse_args():
     common.add_argument('--debug',
                         action='store_true',
                         help='run ansible commands in debug mode')
+
+    common.add_argument('--truncate',
+                        dest='truncate',
+                        metavar='COLUMNS',
+                        type=int,
+                        default=display.columns,
+                        help='truncate some long output (0=disabled) (default: auto)')
+
+    common.add_argument('--redact',
+                        dest='redact',
+                        action='store_true',
+                        help='redact sensitive values in output')
 
     test = argparse.ArgumentParser(add_help=False, parents=[common])
 
@@ -215,6 +225,26 @@ def parse_args():
                              action='store_true',
                              help='allow destructive tests (--local and --tox only)')
 
+    integration.add_argument('--allow-root',
+                             action='store_true',
+                             help='allow tests requiring root when not root')
+
+    integration.add_argument('--allow-disabled',
+                             action='store_true',
+                             help='allow tests which have been marked as disabled')
+
+    integration.add_argument('--allow-unstable',
+                             action='store_true',
+                             help='allow tests which have been marked as unstable')
+
+    integration.add_argument('--allow-unstable-changed',
+                             action='store_true',
+                             help='allow tests which have been marked as unstable when focused changes are detected')
+
+    integration.add_argument('--allow-unsupported',
+                             action='store_true',
+                             help='allow tests which have been marked as unsupported')
+
     integration.add_argument('--retry-on-error',
                              action='store_true',
                              help='retry failed test with increased verbosity')
@@ -268,6 +298,10 @@ def parse_args():
                                      metavar='PATH',
                                      help='path to inventory used for tests')
 
+    network_integration.add_argument('--testcase',
+                                     metavar='TESTCASE',
+                                     help='limit a test to a specified testcase').completer = complete_network_testcase
+
     windows_integration = subparsers.add_parser('windows-integration',
                                                 parents=[integration],
                                                 help='windows integration tests')
@@ -301,22 +335,6 @@ def parse_args():
                        help='collect tests but do not execute them')
 
     add_extra_docker_options(units, integration=False)
-
-    compiler = subparsers.add_parser('compile',
-                                     parents=[test],
-                                     help='compile tests')
-
-    compiler.set_defaults(func=command_compile,
-                          targets=walk_compile_targets,
-                          config=CompileConfig)
-
-    compiler.add_argument('--python',
-                          metavar='VERSION',
-                          choices=COMPILE_PYTHON_VERSIONS + ('default',),
-                          help='python version: %s' % ', '.join(COMPILE_PYTHON_VERSIONS))
-
-    add_lint(compiler)
-    add_extra_docker_options(compiler, integration=False)
 
     sanity = subparsers.add_parser('sanity',
                                    parents=[test],
@@ -399,6 +417,15 @@ def parse_args():
     coverage_report.add_argument('--show-missing',
                                  action='store_true',
                                  help='show line numbers of statements not executed')
+    coverage_report.add_argument('--include',
+                                 metavar='PAT1,PAT2,...',
+                                 help='include only files whose paths match one of these '
+                                      'patterns. Accepts shell-style wildcards, which must be '
+                                      'quoted.')
+    coverage_report.add_argument('--omit',
+                                 metavar='PAT1,PAT2,...',
+                                 help='omit files whose paths match one of these patterns. '
+                                      'Accepts shell-style wildcards, which must be quoted.')
 
     add_extra_coverage_options(coverage_report)
 
@@ -600,12 +627,15 @@ def add_extra_docker_options(parser, integration=True):
 
     docker.add_argument('--docker-util',
                         metavar='IMAGE',
-                        default='httptester',
+                        default='quay.io/ansible/http-test-container:1.0.0',
                         help='docker utility image to provide test services')
 
     docker.add_argument('--docker-privileged',
                         action='store_true',
                         help='run docker container in privileged mode')
+
+    docker.add_argument('--docker-memory',
+                        help='memory limit for docker in bytes', type=int)
 
 
 def complete_target(prefix, parsed_args, **_):
@@ -666,6 +696,31 @@ def complete_network_platform(prefix, parsed_args, **_):
         images = completion_fd.read().splitlines()
 
     return [i for i in images if i.startswith(prefix) and (not parsed_args.platform or i not in parsed_args.platform)]
+
+
+def complete_network_testcase(prefix, parsed_args, **_):
+    """
+    :type prefix: unicode
+    :type parsed_args: any
+    :rtype: list[str]
+    """
+    testcases = []
+
+    # since testcases are module specific, don't autocomplete if more than one
+    # module is specidied
+    if len(parsed_args.include) != 1:
+        return []
+
+    test_dir = 'test/integration/targets/%s/tests' % parsed_args.include[0]
+    connections = os.listdir(test_dir)
+
+    for conn in connections:
+        if os.path.isdir(os.path.join(test_dir, conn)):
+            for testcase in os.listdir(os.path.join(test_dir, conn)):
+                if testcase.startswith(prefix):
+                    testcases.append(testcase.split('.')[0])
+
+    return testcases
 
 
 def complete_sanity_test(prefix, parsed_args, **_):

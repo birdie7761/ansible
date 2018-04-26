@@ -1,17 +1,15 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 #
-# Copyright: Ansible Project
+# Copyright: (c) 2017, Ansible Project
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
-
 ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
-
 
 DOCUMENTATION = '''
 ---
@@ -21,7 +19,6 @@ description:
     - Find the folder path(s) for a virtual machine by name or UUID
 version_added: 2.4
 author:
-    - James Tanner <tanner.jc@gmail.com>
     - Abhijeet Kasurde <akasurde@redhat.com>
 notes:
     - Tested on vSphere 6.5
@@ -30,22 +27,21 @@ requirements:
     - PyVmomi
 options:
    name:
-        description:
-            - Name of the VM to work with.
-            - This is required if uuid is not supplied.
+     description:
+     - Name of the VM to work with.
+     - This is required if C(uuid) parameter is not supplied.
    uuid:
-        description:
-            - UUID of the instance to manage if known, this is VMware's BIOS UUID.
-            - This is required if name is not supplied.
+     description:
+     - UUID of the instance to manage if known, this is VMware's BIOS UUID.
+     - This is required if C(name) parameter is not supplied.
    datacenter:
-        description:
-            - Destination datacenter for the find operation.
-            - Deprecated in 2.5, will be removed in 2.9 release.
-        required: True
+     description:
+     - Destination datacenter for the find operation.
+     - Deprecated in 2.5, will be removed in 2.9 release.
 extends_documentation_fragment: vmware.documentation
 '''
 
-EXAMPLES = '''
+EXAMPLES = r'''
 - name: Find Guest's Folder using name
   vmware_guest_find:
     hostname: 192.168.1.209
@@ -70,6 +66,9 @@ folders:
     description: List of folders for user specified virtual machine
     returned: on success
     type: list
+    sample: [
+        '/DC0/vm',
+    ]
 """
 
 
@@ -77,9 +76,7 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils._text import to_native
 from ansible.module_utils.vmware import PyVmomi, get_all_objs, vmware_argument_spec
 
-
 try:
-    import pyVmomi
     from pyVmomi import vim
 except ImportError:
     pass
@@ -88,8 +85,6 @@ except ImportError:
 class PyVmomiHelper(PyVmomi):
     def __init__(self, module):
         super(PyVmomiHelper, self).__init__(module)
-        self.datacenter = None
-        self.folders = None
         self.name = self.params['name']
         self.uuid = self.params['uuid']
 
@@ -114,11 +109,13 @@ def main():
     argument_spec.update(
         name=dict(type='str'),
         uuid=dict(type='str'),
-        datacenter=dict(removed_in_version=2.9, type='str', required=True)
+        datacenter=dict(removed_in_version=2.9, type='str')
     )
 
     module = AnsibleModule(argument_spec=argument_spec,
-                           required_one_of=[['name', 'uuid']])
+                           required_one_of=[['name', 'uuid']],
+                           mutually_exclusive=[['name', 'uuid']],
+                           )
 
     pyv = PyVmomiHelper(module)
     # Check if the VM exists before continuing

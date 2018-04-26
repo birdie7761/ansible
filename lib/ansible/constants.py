@@ -5,7 +5,7 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-import os  # used to set lang and for backwards compat get_config
+import os
 
 from ast import literal_eval
 from jinja2 import Template
@@ -17,14 +17,14 @@ from ansible.module_utils.six import string_types
 from ansible.config.manager import ConfigManager, ensure_type, get_ini_config_value
 
 
-def _deprecated(msg):
+def _deprecated(msg, version='2.8'):
     ''' display is not guaranteed here, nor it being the full class, but try anyways, fallback to sys.stderr.write '''
     try:
         from __main__ import display
-        display.deprecated(msg, version='2.8')
+        display.deprecated(msg, version=version)
     except:
         import sys
-        sys.stderr.write('[DEPRECATED] %s, to be removed in 2.8' % msg)
+        sys.stderr.write('[DEPRECATED] %s, to be removed in %s' % (msg, version))
 
 
 def mk_boolean(value):
@@ -91,6 +91,10 @@ DEFAULT_SUDO_PASS = None
 DEFAULT_REMOTE_PASS = None
 DEFAULT_SUBSET = None
 DEFAULT_SU_PASS = None
+# FIXME: expand to other plugins, but never doc fragments
+CONFIGURABLE_PLUGINS = ('cache', 'callback', 'connection', 'inventory', 'lookup', 'shell')
+# NOTE: always update the docs/docsite/Makefile to match
+DOCUMENTABLE_PLUGINS = CONFIGURABLE_PLUGINS + ('module', 'strategy', 'vars')
 IGNORE_FILES = ("COPYING", "CONTRIBUTING", "LICENSE", "README", "VERSION", "GUIDELINES")  # ignore during module search
 INTERNAL_RESULT_KEYS = ('add_host', 'add_group')
 LOCALHOST = ('127.0.0.1', 'localhost', '::1')
@@ -114,7 +118,6 @@ MAGIC_VARIABLE_MAPPING = dict(
     module_compression=('ansible_module_compression', ),
     shell=('ansible_shell_type', ),
     executable=('ansible_shell_executable', ),
-    remote_tmp_dir=('ansible_remote_tmp', ),
 
     # connection common
     remote_addr=('ansible_ssh_host', 'ansible_host'),

@@ -6,11 +6,15 @@
 from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
+import os
+import re
+
 from ansible.module_utils._text import to_text
 from ansible.module_utils.basic import env_fallback
 from ansible.module_utils.connection import exec_command
 from ansible.module_utils.network.common.utils import to_list, ComplexList
 from ansible.module_utils.six import iteritems
+from ansible.module_utils.parsing.convert_bool import BOOLEANS_TRUE
 from collections import defaultdict
 
 try:
@@ -21,13 +25,33 @@ except ImportError:
 
 
 f5_provider_spec = {
-    'server': dict(fallback=(env_fallback, ['F5_SERVER'])),
-    'server_port': dict(type='int', default=443, fallback=(env_fallback, ['F5_SERVER_PORT'])),
-    'user': dict(fallback=(env_fallback, ['F5_USER', 'ANSIBLE_NET_USERNAME'])),
-    'password': dict(no_log=True, fallback=(env_fallback, ['F5_PASSWORD', 'ANSIBLE_NET_PASSWORD'])),
-    'ssh_keyfile': dict(fallback=(env_fallback, ['ANSIBLE_NET_SSH_KEYFILE']), type='path'),
-    'validate_certs': dict(type='bool', fallback=(env_fallback, ['F5_VALIDATE_CERTS'])),
-    'transport': dict(default='rest', choices=['cli', 'rest'])
+    'server': dict(
+        fallback=(env_fallback, ['F5_SERVER'])
+    ),
+    'server_port': dict(
+        type='int',
+        fallback=(env_fallback, ['F5_SERVER_PORT'])
+    ),
+    'user': dict(
+        fallback=(env_fallback, ['F5_USER', 'ANSIBLE_NET_USERNAME'])
+    ),
+    'password': dict(
+        no_log=True,
+        aliases=['pass', 'pwd'],
+        fallback=(env_fallback, ['F5_PASSWORD', 'ANSIBLE_NET_PASSWORD'])
+    ),
+    'ssh_keyfile': dict(
+        type='path'
+    ),
+    'validate_certs': dict(
+        type='bool',
+        fallback=(env_fallback, ['F5_VALIDATE_CERTS'])
+    ),
+    'transport': dict(
+        choices=['cli', 'rest'],
+        default='rest'
+    ),
+    'timeout': dict(type='int'),
 }
 
 f5_argument_spec = {
@@ -35,12 +59,34 @@ f5_argument_spec = {
 }
 
 f5_top_spec = {
-    'server': dict(removed_in_version=2.9, fallback=(env_fallback, ['F5_SERVER'])),
-    'user': dict(removed_in_version=2.9, fallback=(env_fallback, ['F5_USER', 'ANSIBLE_NET_USERNAME'])),
-    'password': dict(removed_in_version=2.9, no_log=True, fallback=(env_fallback, ['F5_PASSWORD'])),
-    'validate_certs': dict(removed_in_version=2.9, type='bool', fallback=(env_fallback, ['F5_VALIDATE_CERTS'])),
-    'server_port': dict(removed_in_version=2.9, type='int', default=443, fallback=(env_fallback, ['F5_SERVER_PORT'])),
-    'transport': dict(removed_in_version=2.9, choices=['cli', 'rest'])
+    'server': dict(
+        removed_in_version=2.9,
+        fallback=(env_fallback, ['F5_SERVER'])
+    ),
+    'user': dict(
+        removed_in_version=2.9,
+        fallback=(env_fallback, ['F5_USER', 'ANSIBLE_NET_USERNAME'])
+    ),
+    'password': dict(
+        removed_in_version=2.9,
+        no_log=True,
+        aliases=['pass', 'pwd'],
+        fallback=(env_fallback, ['F5_PASSWORD', 'ANSIBLE_NET_PASSWORD'])
+    ),
+    'validate_certs': dict(
+        removed_in_version=2.9,
+        type='bool',
+        fallback=(env_fallback, ['F5_VALIDATE_CERTS'])
+    ),
+    'server_port': dict(
+        removed_in_version=2.9,
+        type='int',
+        fallback=(env_fallback, ['F5_SERVER_PORT'])
+    ),
+    'transport': dict(
+        removed_in_version=2.9,
+        choices=['cli', 'rest']
+    )
 }
 f5_argument_spec.update(f5_top_spec)
 
@@ -49,10 +95,69 @@ def get_provider_argspec():
     return f5_provider_spec
 
 
+def load_params(params):
+    provider = params.get('provider') or dict()
+    for key, value in iteritems(provider):
+        if key in f5_argument_spec:
+            if params.get(key) is None and value is not None:
+                params[key] = value
+
+
 # Fully Qualified name (with the partition)
 def fqdn_name(partition, value):
-    if value is not None and not value.startswith('/'):
-        return '/{0}/{1}'.format(partition, value)
+    """This method is not used
+
+    This was the original name of a method that was used throughout all
+    the F5 Ansible modules. This is now deprecated, and should be removed
+    in 2.9. All modules should be changed to use ``fq_name``.
+
+    TODO(Remove in Ansible 2.9)
+    """
+    return fq_name(partition, value)
+
+
+def fq_name(partition, value):
+    """Returns a 'Fully Qualified' name
+
+    A BIG-IP expects most names of resources to be in a fully-qualified
+    form. This means that both the simple name, and the partition need
+    to be combined.
+
+    The Ansible modules, however, can accept (as names for several
+    resources) their name in the FQ format. This becomes an issue when
+    the FQ name and the partition are both specified as separate values.
+
+    Consider the following examples.
+
+        # Name not FQ
+        name: foo
+        partition: Common
+
+        # Name FQ
+        name: /Common/foo
+        partition: Common
+
+    This method will rectify the above situation and will, in both cases,
+    return the following for name.
+
+        /Common/foo
+
+    Args:
+        partition (string): The partition that you would want attached to
+            the name if the name has no partition.
+        value (string): The name that you want to attach a partition to.
+            This value will be returned unchanged if it has a partition
+            attached to it already.
+    Returns:
+        string: The fully qualified name, given the input parameters.
+    """
+    if value is not None:
+        try:
+            int(value)
+            return '/{0}/{1}'.format(partition, value)
+        except (ValueError, TypeError):
+            if not value.startswith('/'):
+                return '/{0}/{1}'.format(partition, value)
     return value
 
 
@@ -80,8 +185,9 @@ def run_commands(module, commands, check_rc=True):
         cmd = module.jsonify(cmd)
         rc, out, err = exec_command(module, cmd)
         if check_rc and rc != 0:
-            module.fail_json(msg=to_text(err, errors='surrogate_then_replace'), rc=rc)
-        responses.append(to_text(out, errors='surrogate_then_replace'))
+            raise F5ModuleError(to_text(err, errors='surrogate_then_replace'))
+        result = to_text(out, errors='surrogate_then_replace')
+        responses.append(result)
     return responses
 
 
@@ -93,6 +199,133 @@ def cleanup_tokens(client):
         resource.delete()
     except Exception:
         pass
+
+
+def is_cli(module):
+    transport = module.params['transport']
+    provider_transport = (module.params['provider'] or {}).get('transport')
+    result = 'cli' in (transport, provider_transport)
+    return result
+
+
+def is_valid_hostname(host):
+    """Reasonable attempt at validating a hostname
+
+    Compiled from various paragraphs outlined here
+    https://tools.ietf.org/html/rfc3696#section-2
+    https://tools.ietf.org/html/rfc1123
+
+    Notably,
+    * Host software MUST handle host names of up to 63 characters and
+      SHOULD handle host names of up to 255 characters.
+    * The "LDH rule", after the characters that it permits. (letters, digits, hyphen)
+    * If the hyphen is used, it is not permitted to appear at
+      either the beginning or end of a label
+
+    :param host:
+    :return:
+    """
+    if len(host) > 255:
+        return False
+    host = host.rstrip(".")
+    allowed = re.compile(r'(?!-)[A-Z0-9-]{1,63}(?<!-)$', re.IGNORECASE)
+    result = all(allowed.match(x) for x in host.split("."))
+    return result
+
+
+def is_valid_fqdn(host):
+    """Reasonable attempt at validating a hostname
+
+    Compiled from various paragraphs outlined here
+    https://tools.ietf.org/html/rfc3696#section-2
+    https://tools.ietf.org/html/rfc1123
+
+    Notably,
+    * Host software MUST handle host names of up to 63 characters and
+      SHOULD handle host names of up to 255 characters.
+    * The "LDH rule", after the characters that it permits. (letters, digits, hyphen)
+    * If the hyphen is used, it is not permitted to appear at
+      either the beginning or end of a label
+
+    :param host:
+    :return:
+    """
+    if len(host) > 255:
+        return False
+    host = host.rstrip(".")
+    allowed = re.compile(r'(?!-)[A-Z0-9-]{1,63}(?<!-)$', re.IGNORECASE)
+    result = all(allowed.match(x) for x in host.split("."))
+    if result:
+        parts = host.split('.')
+        if len(parts) > 1:
+            return True
+    return False
+
+
+def dict2tuple(items):
+    """Convert a dictionary to a list of tuples
+
+    This method is used in cases where dictionaries need to be compared. Due
+    to dictionaries inherently having no order, it is easier to compare list
+    of tuples because these lists can be converted to sets.
+
+    This conversion only supports dicts of simple values. Do not give it dicts
+    that contain sub-dicts. This will not give you the result you want when using
+    the returned tuple for comparison.
+
+    Args:
+        items (dict): The dictionary of items that should be converted
+
+    Returns:
+        list: Returns a list of tuples upon success. Otherwise, an empty list.
+    """
+    result = []
+    for x in items:
+        tmp = [(str(k), str(v)) for k, v in iteritems(x)]
+        result += tmp
+    return result
+
+
+def compare_dictionary(want, have):
+    """Performs a dictionary comparison
+
+    Args:
+        want (dict): Dictionary to compare with second parameter.
+        have (dict): Dictionary to compare with first parameter.
+
+    Returns:
+        bool:
+    :param have:
+    :return:
+    """
+    if want == [] and have is None:
+        return None
+    if want is None:
+        return None
+    w = dict2tuple(want)
+    h = dict2tuple(have)
+    if set(w) == set(h):
+        return None
+    else:
+        return want
+
+
+def is_ansible_debug(module):
+    if module._debug and module._verbosity >= 4:
+        return True
+    return False
+
+
+def fail_json(module, ex, client=None):
+    if is_ansible_debug(module) and client:
+        module.fail_json(msg=str(ex), __f5debug__=client.api.debug_output)
+    module.fail_json(msg=str(ex))
+
+
+def exit_json(module, results, client=None):
+    if is_ansible_debug(module) and client:
+        results['__f5debug__'] = client.api.debug_output
+    module.exit_json(**results)
 
 
 class Noop(object):
@@ -112,6 +345,9 @@ class Noop(object):
 class F5BaseClient(object):
     def __init__(self, *args, **kwargs):
         self.params = kwargs
+        self.module = kwargs.get('module', None)
+        load_params(self.params)
+        self._client = None
 
     @property
     def api(self):
@@ -132,18 +368,91 @@ class F5BaseClient(object):
         :return:
         :raises iControlUnexpectedHTTPError
         """
-        self.api = self.mgmt
+        self._client = None
+
+    def merge_provider_params(self):
+        result = dict()
+
+        provider = self.params.get('provider', {})
+
+        if provider.get('server', None):
+            result['server'] = provider.get('server', None)
+        elif self.params.get('server', None):
+            result['server'] = self.params.get('server', None)
+        elif os.environ.get('F5_SERVER', None):
+            result['server'] = os.environ.get('F5_SERVER', None)
+
+        if provider.get('server_port', None):
+            result['server_port'] = provider.get('server_port', None)
+        elif self.params.get('server_port', None):
+            result['server_port'] = self.params.get('server_port', None)
+        elif os.environ.get('F5_SERVER_PORT', None):
+            result['server_port'] = os.environ.get('F5_SERVER_PORT', None)
+        else:
+            result['server_port'] = 443
+
+        if provider.get('validate_certs', None) is not None:
+            result['validate_certs'] = provider.get('validate_certs', None)
+        elif self.params.get('validate_certs', None) is not None:
+            result['validate_certs'] = self.params.get('validate_certs', None)
+        elif os.environ.get('F5_VALIDATE_CERTS', None) is not None:
+            result['validate_certs'] = os.environ.get('F5_VALIDATE_CERTS', None)
+        else:
+            result['validate_certs'] = True
+
+        if provider.get('auth_provider', None):
+            result['auth_provider'] = provider.get('auth_provider', None)
+        elif self.params.get('auth_provider', None):
+            result['auth_provider'] = self.params.get('auth_provider', None)
+        else:
+            result['auth_provider'] = 'tmos'
+
+        if provider.get('user', None):
+            result['user'] = provider.get('user', None)
+        elif self.params.get('user', None):
+            result['user'] = self.params.get('user', None)
+        elif os.environ.get('F5_USER', None):
+            result['user'] = os.environ.get('F5_USER', None)
+        elif os.environ.get('ANSIBLE_NET_USERNAME', None):
+            result['user'] = os.environ.get('ANSIBLE_NET_USERNAME', None)
+        else:
+            result['user'] = True
+
+        if provider.get('password', None):
+            result['password'] = provider.get('password', None)
+        elif self.params.get('user', None):
+            result['password'] = self.params.get('password', None)
+        elif os.environ.get('F5_PASSWORD', None):
+            result['password'] = os.environ.get('F5_PASSWORD', None)
+        elif os.environ.get('ANSIBLE_NET_PASSWORD', None):
+            result['password'] = os.environ.get('ANSIBLE_NET_PASSWORD', None)
+        else:
+            result['password'] = True
+
+        if result['validate_certs'] in BOOLEANS_TRUE:
+            result['validate_certs'] = True
+        else:
+            result['validate_certs'] = False
+
+        return result
 
 
 class AnsibleF5Parameters(object):
-    def __init__(self, params=None):
+    def __init__(self, *args, **kwargs):
         self._values = defaultdict(lambda: None)
         self._values['__warnings'] = []
+        self.client = kwargs.pop('client', None)
+        self._module = kwargs.pop('module', None)
+        self._params = {}
+
+        params = kwargs.pop('params', None)
         if params:
             self.update(params=params)
+            self._params.update(params)
 
     def update(self, params=None):
         if params:
+            self._params.update(params)
             for k, v in iteritems(params):
                 if self.api_map is not None and k in self.api_map:
                     map_key = self.api_map[k]

@@ -60,6 +60,8 @@ notes:
   - This module requires the netconf system service be enabled on
     the remote device being managed.
   - Tested against vSRX JUNOS version 15.1X49-D15.4, vqfx-10000 JUNOS Version 15.1X53-D60.4.
+  - Recommended connection is C(netconf). See L(the Junos OS Platform Options,../network/user_guide/platform_junos.html).
+  - This module also works with C(local) connections for legacy playbooks.
 """
 
 EXAMPLES = """
@@ -81,7 +83,7 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.network.common.netconf import exec_rpc
 from ansible.module_utils.network.junos.junos import junos_argument_spec, get_param
 from ansible.module_utils.network.junos.junos import get_configuration, get_connection
-from ansible.module_utils.pycompat24 import get_exception
+from ansible.module_utils._text import to_native
 from ansible.module_utils.six import iteritems
 
 
@@ -263,9 +265,8 @@ class Facts(FactsBase):
             device = Device(host, **kwargs)
             device.open()
             device.timeout = get_param(module, 'timeout') or 10
-        except ConnectError:
-            exc = get_exception()
-            module.fail_json('unable to connect to %s: %s' % (host, str(exc)))
+        except ConnectError as exc:
+            module.fail_json('unable to connect to %s: %s' % (host, to_native(exc)))
 
         return device
 
@@ -285,6 +286,7 @@ class Facts(FactsBase):
                     value['object'] = dict(value['object'])
 
         return facts
+
 
 FACT_SUBSETS = dict(
     default=Default,

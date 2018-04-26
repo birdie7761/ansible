@@ -38,6 +38,13 @@ options:
     uid:
         description:
             - Optionally sets the I(UID) of the user.
+    hidden:
+        required: false
+        type: bool
+        description:
+            - Darwin/OS X only, optionally hide the user from the login window and system preferences.
+            - The default will be 'True' if the I(system) option is used.
+        version_added: "2.6"
     non_unique:
         description:
             - Optionally when used with the -u option, this option allows to
@@ -79,12 +86,10 @@ options:
         version_added: "2.0"
     password:
         description:
-            - Optionally set the user's password to this crypted value.  See
-              the user example in the github examples directory for what this looks
-              like in a playbook. See U(http://docs.ansible.com/ansible/faq.html#how-do-i-generate-crypted-passwords-for-the-user-module)
+            - Optionally set the user's password to this crypted value.
+            - On Darwin/OS X systems, this value has to be cleartext. Beware of security issues.
+            - See U(https://docs.ansible.com/ansible/faq.html#how-do-i-generate-crypted-passwords-for-the-user-module)
               for details on various ways to generate these password values.
-              Note on Darwin system, this value has to be cleartext.
-              Beware of security issues.
     state:
         description:
             - Whether the account should exist or not, taking action if the state is different from what is stated.
@@ -119,7 +124,8 @@ options:
         default: "no"
     login_class:
         description:
-            - Optionally sets the user's login class for FreeBSD, OpenBSD and NetBSD systems.
+            - Optionally sets the user's login class for FreeBSD, DragonFlyBSD, OpenBSD and
+              NetBSD systems.
     remove:
         description:
             - When used with C(state=absent), behavior is as with C(userdel --remove).
@@ -170,8 +176,16 @@ options:
     expires:
         description:
             - An expiry time for the user in epoch, it will be ignored on platforms that do not support this.
-              Currently supported on Linux and FreeBSD.
+              Currently supported on Linux, FreeBSD, and DragonFlyBSD.
         version_added: "1.9"
+    password_lock:
+        description:
+            - Lock the password (usermod -L, pw lock, usermod -C).
+              BUT implementation differs on different platforms, this option does not always mean the user cannot login via other methods.
+              This option does not disable the user, only lock the password. Do not change the password in the same task.
+              Currently supported on Linux, FreeBSD, DragonFlyBSD, NetBSD.
+        type: bool
+        version_added: "2.6"
     local:
         description:
             - Forces the use of "local" command alternatives on platforms that implement it.
@@ -229,12 +243,11 @@ import time
 
 from ansible.module_utils._text import to_native
 from ansible.module_utils.basic import load_platform_subclass, AnsibleModule
-from ansible.module_utils.pycompat24 import get_exception
 
 try:
     import spwd
     HAVE_SPWD = True
-except:
+except ImportError:
     HAVE_SPWD = False
 
 
@@ -267,6 +280,7 @@ class User(object):
         self.state = module.params['state']
         self.name = module.params['name']
         self.uid = module.params['uid']
+        self.hidden = module.params['hidden']
         self.non_unique = module.params['non_unique']
         self.seuser = module.params['seuser']
         self.group = module.params['group']
@@ -289,6 +303,7 @@ class User(object):
         self.update_password = module.params['update_password']
         self.home = module.params['home']
         self.expires = None
+        self.password_lock = module.params['password_lock']
         self.groups = None
         self.local = module.params['local']
 
@@ -298,9 +313,8 @@ class User(object):
         if module.params['expires']:
             try:
                 self.expires = time.gmtime(module.params['expires'])
-            except Exception:
-                e = get_exception()
-                module.fail_json(msg="Invalid expires time %s: %s" % (self.expires, e))
+            except Exception as e:
+                module.fail_json(msg="Invalid expires time %s: %s" % (self.expires, to_native(e)))
 
         if module.params['ssh_key_file'] is not None:
             self.ssh_file = module.params['ssh_key_file']
@@ -521,6 +535,11 @@ class User(object):
             cmd.append('-e')
             cmd.append(time.strftime(self.DATE_FORMAT, self.expires))
 
+        if self.password_lock:
+            cmd.append('-L')
+        elif self.password_lock is not None:
+            cmd.append('-U')
+
         if self.update_password == 'always' and self.password is not None and info[1] != self.password:
             cmd.append('-p')
             cmd.append(self.password)
@@ -622,14 +641,17 @@ class User(object):
         if os.path.isabs(self.ssh_file):
             ssh_key_file = self.ssh_file
         else:
+            if not os.path.exists(info[5]) and not self.module.check_mode:
+                raise Exception('User %s home directory does not exist' % self.name)
             ssh_key_file = os.path.join(info[5], self.ssh_file)
         return ssh_key_file
 
     def ssh_key_gen(self):
         info = self.user_info()
-        if not os.path.exists(info[5]) and not self.module.check_mode:
-            return (1, '', 'User %s home directory does not exist' % self.name)
-        ssh_key_file = self.get_ssh_key_path()
+        try:
+            ssh_key_file = self.get_ssh_key_path()
+        except Exception as e:
+            return (1, '', to_native(e))
         ssh_dir = os.path.dirname(ssh_key_file)
         if not os.path.exists(ssh_dir):
             if self.module.check_mode:
@@ -637,9 +659,8 @@ class User(object):
             try:
                 os.mkdir(ssh_dir, int('0700', 8))
                 os.chown(ssh_dir, info[2], info[3])
-            except OSError:
-                e = get_exception()
-                return (1, '', 'Failed to create %s: %s' % (ssh_dir, str(e)))
+            except OSError as e:
+                return (1, '', 'Failed to create %s: %s' % (ssh_dir, to_native(e)))
         if os.path.exists(ssh_key_file):
             return (None, 'Key already exists', '')
         cmd = [self.module.get_bin_path('ssh-keygen', True)]
@@ -709,15 +730,13 @@ class User(object):
             if os.path.exists(skeleton):
                 try:
                     shutil.copytree(skeleton, path, symlinks=True)
-                except OSError:
-                    e = get_exception()
-                    self.module.exit_json(failed=True, msg="%s" % e)
+                except OSError as e:
+                    self.module.exit_json(failed=True, msg="%s" % to_native(e))
         else:
             try:
                 os.makedirs(path)
-            except OSError:
-                e = get_exception()
-                self.module.exit_json(failed=True, msg="%s" % e)
+            except OSError as e:
+                self.module.exit_json(failed=True, msg="%s" % to_native(e))
 
     def chown_homedir(self, uid, gid, path):
         try:
@@ -727,9 +746,8 @@ class User(object):
                     os.chown(os.path.join(root, d), uid, gid)
                 for f in files:
                     os.chown(os.path.join(root, f), uid, gid)
-        except OSError:
-            e = get_exception()
-            self.module.exit_json(failed=True, msg="%s" % e)
+        except OSError as e:
+            self.module.exit_json(failed=True, msg="%s" % to_native(e))
 
 
 # ===========================================
@@ -855,11 +873,15 @@ class FreeBsdUser(User):
             cmd.append('-c')
             cmd.append(self.comment)
 
-        if self.home is not None and info[5] != self.home:
-            if self.move_home:
+        if self.home is not None:
+            if (info[5] != self.home and self.move_home) or (not os.path.exists(self.home) and self.createhome):
                 cmd.append('-m')
             cmd.append('-d')
             cmd.append(self.home)
+
+            if self.skeleton is not None:
+                cmd.append('-k')
+                cmd.append(self.skeleton)
 
         if self.group is not None:
             if not self.group_exists(self.group):
@@ -910,9 +932,8 @@ class FreeBsdUser(User):
                 cmd.append(','.join(new_groups))
 
         if self.expires:
-            days = (time.mktime(self.expires) - time.time()) // 86400
             cmd.append('-e')
-            cmd.append(str(int(days)))
+            cmd.append(str(int(time.mktime(self.expires))))
 
         # modify the user if cmd will do anything
         if cmd_len != len(cmd):
@@ -932,7 +953,41 @@ class FreeBsdUser(User):
             ]
             return self.execute_command(cmd)
 
+        # we have to lock/unlock the password in a distinct command
+        if self.password_lock:
+            cmd = [
+                self.module.get_bin_path('pw', True),
+                'lock',
+                '-n',
+                self.name
+            ]
+            if self.uid is not None and info[2] != int(self.uid):
+                cmd.append('-u')
+                cmd.append(self.uid)
+            return self.execute_command(cmd)
+        elif self.password_lock is not None:
+            cmd = [
+                self.module.get_bin_path('pw', True),
+                'unlock',
+                '-n',
+                self.name
+            ]
+            if self.uid is not None and info[2] != int(self.uid):
+                cmd.append('-u')
+                cmd.append(self.uid)
+            return self.execute_command(cmd)
         return (rc, out, err)
+
+
+class DragonFlyBsdUser(FreeBsdUser):
+    """
+    This is a DragonFlyBSD User manipulation class - it inherits the
+    FreeBsdUser class behaviors, such as using the pw command to
+    manipulate the user database, followed by the chpass command
+    to change the password.
+    """
+
+    platform = 'DragonFly'
 
 
 class OpenBSDUser(User):
@@ -1247,6 +1302,11 @@ class NetBSDUser(User):
             cmd.append('-p')
             cmd.append(self.password)
 
+        if self.password_lock:
+            cmd.append('-C yes')
+        elif self.password_lock is not None:
+            cmd.append('-C no')
+
         # skip if no changes to be made
         if len(cmd) == 1:
             return (None, '', '')
@@ -1289,9 +1349,8 @@ class SunOS(User):
                     maxweeks = value.rstrip('\n')
                 elif key == "WARNWEEKS":
                     warnweeks = value.rstrip('\n')
-        except Exception:
-            err = get_exception()
-            self.module.fail_json(msg="failed to read /etc/default/passwd: %s" % str(err))
+        except Exception as err:
+            self.module.fail_json(msg="failed to read /etc/default/passwd: %s" % to_native(err))
 
         return (minweeks, maxweeks, warnweeks)
 
@@ -1372,9 +1431,8 @@ class SunOS(User):
                         line = ':'.join(fields)
                         lines.append('%s\n' % line)
                     open(self.SHADOWFILE, 'w+').writelines(lines)
-                except Exception:
-                    err = get_exception()
-                    self.module.fail_json(msg="failed to update users password: %s" % str(err))
+                except Exception as err:
+                    self.module.fail_json(msg="failed to update users password: %s" % to_native(err))
 
         return (rc, out, err)
 
@@ -1468,9 +1526,8 @@ class SunOS(User):
                         lines.append('%s\n' % line)
                     open(self.SHADOWFILE, 'w+').writelines(lines)
                     rc = 0
-                except Exception:
-                    err = get_exception()
-                    self.module.fail_json(msg="failed to update users password: %s" % str(err))
+                except Exception as err:
+                    self.module.fail_json(msg="failed to update users password: %s" % to_native(err))
 
         return (rc, out, err)
 
@@ -1504,7 +1561,25 @@ class DarwinUser(User):
         ('shell', 'UserShell'),
         ('uid', 'UniqueID'),
         ('group', 'PrimaryGroupID'),
+        ('hidden', 'IsHidden'),
     ]
+
+    def __init__(self, module):
+
+        super(DarwinUser, self).__init__(module)
+
+        # make the user hidden if option is set or deffer to system option
+        if self.hidden is None:
+            if self.system:
+                self.hidden = 1
+        elif self.hidden:
+            self.hidden = 1
+        else:
+            self.hidden = 0
+
+        # add hidden to processing if set
+        if self.hidden is not None:
+            self.fields.append(('hidden', 'IsHidden'))
 
     def _get_dscl(self):
         return [self.module.get_bin_path('dscl', True), self.dscl_directory]
@@ -2036,7 +2111,6 @@ class HPUX(User):
     def modify_user(self):
         cmd = ['/usr/sam/lbin/usermod.sam']
         info = self.user_info()
-        has_append = self._check_usermod_append()
 
         if self.uid is not None and info[2] != int(self.uid):
             cmd.append('-u')
@@ -2096,6 +2170,7 @@ class HPUX(User):
             cmd.append(self.shell)
 
         if self.update_password == 'always' and self.password is not None and info[1] != self.password:
+            cmd.append('-F')
             cmd.append('-p')
             cmd.append(self.password)
 
@@ -2127,6 +2202,8 @@ def main():
             shell=dict(type='str'),
             password=dict(type='str', no_log=True),
             login_class=dict(type='str'),
+            # following options are specific to macOS
+            hidden=dict(type='bool'),
             # following options are specific to selinux
             seuser=dict(type='str'),
             # following options are specific to userdel
@@ -2148,6 +2225,7 @@ def main():
             ssh_key_passphrase=dict(type='str', no_log=True),
             update_password=dict(type='str', default='always', choices=['always', 'on_create']),
             expires=dict(type='float'),
+            password_lock=dict(type='bool'),
             local=dict(type='bool'),
         ),
         supports_check_mode=True
@@ -2213,7 +2291,6 @@ def main():
         result['comment'] = info[4]
         result['home'] = info[5]
         result['shell'] = info[6]
-        result['uid'] = info[2]
         if user.groups is not None:
             result['groups'] = user.groups
 

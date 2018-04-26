@@ -45,7 +45,7 @@ options:
             - update the package database first
         required: false
         default: false
-        choices: [ true, false ]
+        type: bool
 
 author: Kim Nørgaard (@KimNorgaard)
 requirements: [ "Slackware >= 12.2" ]
@@ -67,6 +67,8 @@ EXAMPLES = '''
     name: foo
     state: latest
 '''
+
+from ansible.module_utils.basic import AnsibleModule
 
 
 def query_package(module, slackpkg_path, name):
@@ -195,8 +197,6 @@ def main():
     elif p["state"] in ['removed', 'absent']:
         remove_packages(module, slackpkg_path, pkgs)
 
-# import module snippets
-from ansible.module_utils.basic import *
 
 if __name__ == '__main__':
     main()

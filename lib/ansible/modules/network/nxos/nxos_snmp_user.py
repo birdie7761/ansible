@@ -46,29 +46,20 @@ options:
     authentication:
         description:
             - Authentication parameters for the user.
-        required: false
-        default: null
         choices: ['md5', 'sha']
     pwd:
         description:
             - Authentication password when using md5 or sha.
-        required: false
-        default: null
     privacy:
         description:
             - Privacy password for the user.
-        required: false
-        default: null
     encrypt:
         description:
             - Enables AES-128 bit encryption when using privacy password.
-        required: false
-        default: null
-        choices: ['true','false']
+        type: bool
     state:
         description:
             - Manage the state of the resource.
-        required: false
         default: present
         choices: ['present','absent']
 '''
@@ -289,9 +280,6 @@ def main():
                 reset = True
                 proposed['encrypt'] = 'aes-128'
 
-            elif encrypt:
-                proposed['encrypt'] = 'aes-128'
-
             delta = dict(set(proposed.items()).difference(existing.items()))
 
             if delta.get('pwd'):
@@ -299,6 +287,9 @@ def main():
 
             if delta:
                 delta['group'] = group
+
+            if delta and encrypt:
+                delta['encrypt'] = 'aes-128'
 
             command = config_snmp_user(delta, user, reset, new)
             commands.append(command)

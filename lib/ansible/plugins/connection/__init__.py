@@ -60,7 +60,9 @@ class ConnectionBase(AnsiblePlugin):
     supports_persistence = False
     force_persistence = False
 
-    def __init__(self, play_context, new_stdin, *args, **kwargs):
+    default_user = None
+
+    def __init__(self, play_context, new_stdin, shell=None, *args, **kwargs):
 
         super(ConnectionBase, self).__init__()
 
@@ -78,8 +80,10 @@ class ConnectionBase(AnsiblePlugin):
         self.success_key = None
         self.prompt = None
         self._connected = False
-
         self._socket_path = None
+
+        if shell is not None:
+            self._shell = shell
 
         # load the shell plugin for this action/connection
         if play_context.shell:
@@ -89,10 +93,15 @@ class ConnectionBase(AnsiblePlugin):
         else:
             shell_type = 'sh'
             shell_filename = os.path.basename(self._play_context.executable)
-            for shell in shell_loader.all():
-                if shell_filename in shell.COMPATIBLE_SHELLS:
-                    shell_type = shell.SHELL_FAMILY
-                    break
+            try:
+                shell = shell_loader.get(shell_filename)
+            except Exception:
+                shell = None
+            if shell is None:
+                for shell in shell_loader.all():
+                    if shell_filename in shell.COMPATIBLE_SHELLS:
+                        break
+            shell_type = shell.SHELL_FAMILY
 
         self._shell = shell_loader.get(shell_type)
         if not self._shell:

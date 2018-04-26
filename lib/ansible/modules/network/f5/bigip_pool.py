@@ -23,7 +23,7 @@ options:
   description:
     description:
       - Specifies descriptive text that identifies the pool.
-    version_added: "2.3"
+    version_added: 2.3
   name:
     description:
       - Pool name
@@ -34,7 +34,7 @@ options:
     description:
       - Load balancing method. When creating a new pool, if this value is not
         specified, the default of C(round-robin) will be used.
-    version_added: "1.3"
+    version_added: 1.3
     choices:
       - dynamic-ratio-member
       - dynamic-ratio-node
@@ -54,41 +54,47 @@ options:
       - ratio-session
       - round-robin
       - weighted-least-connections-member
-      - weighted-least-connections-nod
+      - weighted-least-connections-node
   monitor_type:
     description:
-      - Monitor rule type when C(monitors) is specified. When creating a new
-        pool, if this value is not specified, the default of 'and_list' will
-        be used.
+      - Monitor rule type when C(monitors) is specified.
+      - When creating a new pool, if this value is not specified, the default
+        of 'and_list' will be used.
+      - When C(single) ensures that all specified monitors are checked, but
+        additionally includes checks to make sure you only specified a single
+        monitor.
+      - When C(and_list) ensures that B(all) monitors are checked.
+      - When C(m_of_n) ensures that C(quorum) of C(monitors) are checked. C(m_of_n)
+        B(requires) that a C(quorum) of 1 or greater be set either in the playbook,
+        or already existing on the device.
       - Both C(single) and C(and_list) are functionally identical since BIG-IP
-        considers all monitors as "a list". BIG=IP either has a list of many,
-        or it has a list of one. Where they differ is in the extra guards that
-        C(single) provides; namely that it only allows a single monitor.
-    version_added: "1.3"
+        considers all monitors as "a list".
+    version_added: 1.3
     choices: ['and_list', 'm_of_n', 'single']
   quorum:
     description:
       - Monitor quorum value when C(monitor_type) is C(m_of_n).
-    version_added: "1.3"
+      - Quorum must be a value of 1 or greater when C(monitor_type) is C(m_of_n).
+    version_added: 1.3
   monitors:
     description:
       - Monitor template name list. If the partition is not provided as part of
         the monitor name, then the C(partition) option will be used instead.
-    version_added: "1.3"
+    version_added: 1.3
   slow_ramp_time:
     description:
       - Sets the ramp-up time (in seconds) to gradually ramp up the load on
         newly added or freshly detected up pool members.
-    version_added: "1.3"
+    version_added: 1.3
   reselect_tries:
     description:
       - Sets the number of times the system tries to contact a pool member
         after a passive failure.
-    version_added: "2.2"
+    version_added: 2.2
   service_down_action:
     description:
       - Sets the action to take when node goes down in pool.
-    version_added: "1.3"
+    version_added: 1.3
     choices:
       - none
       - reset
@@ -99,7 +105,17 @@ options:
       - Device partition to manage resources on.
     default: Common
     version_added: 2.5
-  metdata:
+  state:
+    description:
+      - When C(present), guarantees that the pool exists with the provided
+        attributes.
+      - When C(absent), removes the pool from the system.
+    default: present
+    choices:
+      - absent
+      - present
+    version_added: 2.5
+  metadata:
     description:
       - Arbitrary key/value pairs that you can attach to a pool. This is useful in
         situations where you might want to annotate a pool to me managed by Ansible.
@@ -108,13 +124,30 @@ options:
         that are numbers.
       - Data will be persisted, not ephemeral.
     version_added: 2.5
+  priority_group_activation:
+    description:
+      - Specifies whether the system load balances traffic according to the priority
+        number assigned to the pool member.
+      - When creating a new pool, if this parameter is not specified, the default of
+        C(0) will be used.
+      - To disable this setting, provide the value C(0).
+      - Once you enable this setting, you can specify pool member priority when you
+        create a new pool or on a pool member's properties screen.
+      - The system treats same-priority pool members as a group.
+      - To enable priority group activation, provide a number from C(0) to C(65535)
+        that represents the minimum number of members that must be available in one
+        priority group before the system directs traffic to members in a lower
+        priority group.
+      - When a sufficient number of members become available in the higher priority
+        group, the system again directs traffic to the higher priority group.
+    aliases:
+      - minimum_active_members
+    version_added: 2.6
 notes:
   - Requires BIG-IP software version >= 12.
-  - F5 developed module 'F5-SDK' required (https://github.com/F5Networks/f5-common-python).
-  - Best run as a local_action in your playbook.
-requirements:
-  - f5-sdk
-  - Python >= 2.7
+  - To add members do a pool, use the C(bigip_pool_member) module. Previously, the
+    C(bigip_pool) module allowed the management of users, but this has been removed
+    in version 2.5 of Ansible.
 extends_documentation_fragment: f5
 author:
   - Tim Rupp (@caphrim007)
@@ -130,7 +163,7 @@ EXAMPLES = r'''
     state: present
     name: my-pool
     partition: Common
-    lb_method: least-connection-member
+    lb_method: least-connections-member
     slow_ramp_time: 120
   delegate_to: localhost
 
@@ -293,27 +326,49 @@ metadata:
   returned: changed
   type: dict
   sample: {'key1': 'foo', 'key2': 'bar'}
+priority_group_activation:
+  description: The new minimum number of members to activate the priorty group.
+  returned: changed
+  type: int
+  sample: 10
 '''
 
 import re
 
-from ansible.module_utils.f5_utils import AnsibleF5Client
-from ansible.module_utils.f5_utils import AnsibleF5Parameters
-from ansible.module_utils.f5_utils import HAS_F5SDK
-from ansible.module_utils.f5_utils import F5ModuleError
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.basic import env_fallback
 from ansible.module_utils.six import iteritems
-from collections import defaultdict
+
+try:
+    from library.module_utils.network.f5.bigip import HAS_F5SDK
+    from library.module_utils.network.f5.bigip import F5Client
+    from library.module_utils.network.f5.common import F5ModuleError
+    from library.module_utils.network.f5.common import AnsibleF5Parameters
+    from library.module_utils.network.f5.common import cleanup_tokens
+    from library.module_utils.network.f5.common import fq_name
+    from library.module_utils.network.f5.common import f5_argument_spec
+    try:
+        from library.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
+except ImportError:
+    from ansible.module_utils.network.f5.bigip import HAS_F5SDK
+    from ansible.module_utils.network.f5.bigip import F5Client
+    from ansible.module_utils.network.f5.common import F5ModuleError
+    from ansible.module_utils.network.f5.common import AnsibleF5Parameters
+    from ansible.module_utils.network.f5.common import cleanup_tokens
+    from ansible.module_utils.network.f5.common import fq_name
+    from ansible.module_utils.network.f5.common import f5_argument_spec
+    try:
+        from ansible.module_utils.network.f5.common import iControlUnexpectedHTTPError
+    except ImportError:
+        HAS_F5SDK = False
 
 try:
     from netaddr import IPAddress, AddrFormatError
     HAS_NETADDR = True
 except ImportError:
     HAS_NETADDR = False
-
-try:
-    from ansible.module_utils.f5_utils import iControlUnexpectedHTTPError
-except ImportError:
-    HAS_F5SDK = False
 
 
 class Parameters(AnsibleF5Parameters):
@@ -322,54 +377,27 @@ class Parameters(AnsibleF5Parameters):
         'slowRampTime': 'slow_ramp_time',
         'reselectTries': 'reselect_tries',
         'serviceDownAction': 'service_down_action',
-        'monitor': 'monitors'
+        'monitor': 'monitors',
+        'minActiveMembers': 'priority_group_activation'
     }
 
     api_attributes = [
         'description', 'name', 'loadBalancingMode', 'monitor', 'slowRampTime',
-        'reselectTries', 'serviceDownAction', 'metadata'
+        'reselectTries', 'serviceDownAction', 'metadata', 'minActiveMembers'
     ]
 
     returnables = [
         'monitor_type', 'quorum', 'monitors', 'service_down_action',
         'description', 'lb_method', 'slow_ramp_time',
-        'reselect_tries', 'monitor', 'name', 'partition', 'metadata'
+        'reselect_tries', 'monitor', 'name', 'partition', 'metadata',
+        'priority_group_activation'
     ]
 
     updatables = [
         'monitor_type', 'quorum', 'monitors', 'service_down_action',
         'description', 'lb_method', 'slow_ramp_time', 'reselect_tries',
-        'metadata'
+        'metadata', 'priority_group_activation'
     ]
-
-    def __init__(self, params=None):
-        self._values = defaultdict(lambda: None)
-        if params:
-            self.update(params=params)
-        self._values['__warnings'] = []
-
-    def update(self, params=None):
-        if params:
-            for k, v in iteritems(params):
-                if self.api_map is not None and k in self.api_map:
-                    map_key = self.api_map[k]
-                else:
-                    map_key = k
-
-                # Handle weird API parameters like `dns.proxy.__iter__` by
-                # using a map provided by the module developer
-                class_attr = getattr(type(self), map_key, None)
-                if isinstance(class_attr, property):
-                    # There is a mapped value for the api_map key
-                    if class_attr.fset is None:
-                        # If the mapped value does not have an associated setter
-                        self._values[map_key] = v
-                    else:
-                        # The mapped value has a setter
-                        setattr(self, map_key, v)
-                else:
-                    # If the mapped value is not a @property
-                    self._values[map_key] = v
 
     @property
     def lb_method(self):
@@ -382,35 +410,6 @@ class Parameters(AnsibleF5Parameters):
             raise F5ModuleError('Provided lb_method is unknown')
         return lb_method
 
-    def _fqdn_name(self, value):
-        if value is not None and not value.startswith('/'):
-            return '/{0}/{1}'.format(self.partition, value)
-        return value
-
-    @property
-    def monitors(self):
-        if self._values['monitors'] is None:
-            return None
-        monitors = [self._fqdn_name(x) for x in self.monitors_list]
-        if self.monitor_type == 'm_of_n':
-            monitors = ' '.join(monitors)
-            result = 'min %s of { %s }' % (self.quorum, monitors)
-        else:
-            result = ' and '.join(monitors).strip()
-        return result
-
-    def api_params(self):
-        result = {}
-        for api_attribute in self.api_attributes:
-            if self.api_map is not None and api_attribute in self.api_map:
-                result[api_attribute] = getattr(
-                    self, self.api_map[api_attribute]
-                )
-            else:
-                result[api_attribute] = getattr(self, api_attribute)
-        result = self._filter_params(result)
-        return result
-
     def _verify_quorum_type(self, quorum):
         try:
             if quorum is None:
@@ -420,6 +419,24 @@ class Parameters(AnsibleF5Parameters):
             raise F5ModuleError(
                 "The specified 'quorum' must be an integer."
             )
+
+    @property
+    def monitors(self):
+        if self._values['monitors'] is None:
+            return None
+        monitors = [fq_name(self.partition, x) for x in self.monitors_list]
+        if self.monitor_type == 'm_of_n':
+            monitors = ' '.join(monitors)
+            result = 'min %s of { %s }' % (self.quorum, monitors)
+        else:
+            result = ' and '.join(monitors).strip()
+        return result
+
+    @property
+    def priority_group_activation(self):
+        if self._values['priority_group_activation'] is None:
+            return None
+        return int(self._values['priority_group_activation'])
 
 
 class ApiParameters(Parameters):
@@ -452,7 +469,7 @@ class ApiParameters(Parameters):
         if self._values['monitors'] is None:
             return []
         try:
-            result = re.findall(r'/\w+/[^\s}]+', self._values['monitors'])
+            result = re.findall(r'/[\w-]+/[^\s}]+', self._values['monitors'])
             return result
         except Exception:
             return self._values['monitors']
@@ -539,8 +556,17 @@ class UsableChanges(Changes):
 class ReportableChanges(Changes):
     @property
     def monitors(self):
-        result = sorted(re.findall(r'/\w+/[^\s}]+', self._values['monitors']))
+        result = sorted(re.findall(r'/[\w-]+/[^\s}]+', self._values['monitors']))
         return result
+
+    @property
+    def monitor_type(self):
+        pattern = r'min\s+\d+\s+of'
+        matches = re.search(pattern, self._values['monitors'])
+        if matches:
+            return 'm_of_n'
+        else:
+            return 'and_list'
 
     @property
     def metadata(self):
@@ -590,16 +616,29 @@ class Difference(object):
         else:
             return want
 
-    @property
-    def monitor_type(self):
+    def _monitors_and_quorum(self):
         if self.want.monitor_type is None:
             self.want.update(dict(monitor_type=self.have.monitor_type))
-        if self.want.quorum is None:
-            self.want.update(dict(quorum=self.have.quorum))
-        if self.want.monitor_type == 'm_of_n' and self.want.quorum is None:
-            raise F5ModuleError(
-                "Quorum value must be specified with monitor_type 'm_of_n'."
-            )
+        if self.want.monitor_type == 'm_of_n':
+            if self.want.quorum is None:
+                self.want.update(dict(quorum=self.have.quorum))
+            if self.want.quorum is None or self.want.quorum < 1:
+                raise F5ModuleError(
+                    "Quorum value must be specified with monitor_type 'm_of_n'."
+                )
+            if self.want.monitors != self.have.monitors:
+                return dict(
+                    monitors=self.want.monitors
+                )
+        elif self.want.monitor_type == 'and_list':
+            if self.want.quorum is not None and self.want.quorum > 0:
+                raise F5ModuleError(
+                    "Quorum values have no effect when used with 'and_list'."
+                )
+            if self.want.monitors != self.have.monitors:
+                return dict(
+                    monitors=self.want.monitors
+                )
         elif self.want.monitor_type == 'single':
             if len(self.want.monitors_list) > 1:
                 raise F5ModuleError(
@@ -619,8 +658,18 @@ class Difference(object):
             # Remember that 'single' is nothing more than a fancy way of saying
             # "and_list plus some extra checks"
             self.want.update(dict(monitor_type='and_list'))
-        if self.want.monitor_type != self.have.monitor_type:
-            return self.want.monitor_type
+        if self.want.monitors != self.have.monitors:
+            return dict(
+                monitors=self.want.monitors
+            )
+
+    @property
+    def monitor_type(self):
+        return self._monitors_and_quorum()
+
+    @property
+    def quorum(self):
+        return self._monitors_and_quorum()
 
     @property
     def monitors(self):
@@ -650,9 +699,10 @@ class Difference(object):
 
 
 class ModuleManager(object):
-    def __init__(self, client):
-        self.client = client
-        self.want = ModuleParameters(params=self.client.module.params)
+    def __init__(self, *args, **kwargs):
+        self.module = kwargs.get('module', None)
+        self.client = kwargs.get('client', None)
+        self.want = ModuleParameters(params=self.module.params)
         self.have = ApiParameters()
         self.changes = UsableChanges()
 
@@ -669,7 +719,7 @@ class ModuleManager(object):
         except iControlUnexpectedHTTPError as e:
             raise F5ModuleError(str(e))
 
-        reportable = ReportableChanges(self.changes.to_return())
+        reportable = ReportableChanges(params=self.changes.to_return())
         changes = reportable.to_return()
         result.update(**changes)
         result.update(dict(changed=changed))
@@ -679,7 +729,7 @@ class ModuleManager(object):
     def _announce_deprecations(self, result):
         warnings = result.pop('__warnings', [])
         for warning in warnings:
-            self.client.module.deprecate(
+            self.module.deprecate(
                 msg=warning['msg'],
                 version=warning['version']
             )
@@ -690,7 +740,7 @@ class ModuleManager(object):
             if getattr(self.want, key) is not None:
                 changed[key] = getattr(self.want, key)
         if changed:
-            self.changes = UsableChanges(changed)
+            self.changes = UsableChanges(params=changed)
 
     def _update_changed_options(self):
         diff = Difference(self.want, self.have)
@@ -706,7 +756,7 @@ class ModuleManager(object):
                 else:
                     changed[k] = change
         if changed:
-            self.changes = UsableChanges(changed)
+            self.changes = UsableChanges(params=changed)
             return True
         return False
 
@@ -731,13 +781,13 @@ class ModuleManager(object):
         self.have = self.read_current_from_device()
         if not self.should_update():
             return False
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.update_on_device()
         return True
 
     def remove(self):
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.remove_from_device()
         if self.exists():
@@ -754,17 +804,23 @@ class ModuleManager(object):
             if self.want.monitor_type is None:
                 self.want.update(dict(monitor_type='and_list'))
 
-        if self.want.monitor_type == 'm_of_n' and self.want.quorum is None:
+        if self.want.monitor_type == 'm_of_n' and (self.want.quorum is None or self.want.quorum < 1):
             raise F5ModuleError(
                 "Quorum value must be specified with monitor_type 'm_of_n'."
+            )
+        elif self.want.monitor_type == 'and_list' and self.want.quorum is not None and self.want.quorum > 0:
+            raise F5ModuleError(
+                "Quorum values have no effect when used with 'and_list'."
             )
         elif self.want.monitor_type == 'single' and len(self.want.monitors_list) > 1:
             raise F5ModuleError(
                 "When using a 'monitor_type' of 'single', only one monitor may be provided"
             )
+        if self.want.priority_group_activation is None:
+            self.want.update({'priority_group_activation': 0})
 
         self._set_changed_options()
-        if self.client.check_mode:
+        if self.module.check_mode:
             return True
         self.create_on_device()
         return True
@@ -804,7 +860,7 @@ class ModuleManager(object):
                 params='expandSubcollections=true'
             )
         )
-        return ApiParameters(resource.attrs)
+        return ApiParameters(params=resource.attrs)
 
 
 class ArgumentSpec(object):
@@ -831,7 +887,7 @@ class ArgumentSpec(object):
             'weighted-least-connections-node'
         ]
         self.supports_check_mode = True
-        self.argument_spec = dict(
+        argument_spec = dict(
             name=dict(
                 required=True,
                 aliases=['pool']
@@ -863,44 +919,46 @@ class ArgumentSpec(object):
                 ]
             ),
             description=dict(),
-            metadata=dict(type='raw')
+            metadata=dict(type='raw'),
+            state=dict(
+                default='present',
+                choices=['present', 'absent']
+            ),
+            partition=dict(
+                default='Common',
+                fallback=(env_fallback, ['F5_PARTITION'])
+            ),
+            priority_group_activation=dict(
+                type='int',
+                aliases=['minimum_active_members']
+            )
         )
-        self.f5_product_name = 'bigip'
-
-
-def cleanup_tokens(client):
-    try:
-        resource = client.api.shared.authz.tokens_s.token.load(
-            name=client.api.icrs.token
-        )
-        resource.delete()
-    except Exception:
-        pass
+        self.argument_spec = {}
+        self.argument_spec.update(f5_argument_spec)
+        self.argument_spec.update(argument_spec)
 
 
 def main():
-    if not HAS_F5SDK:
-        raise F5ModuleError("The python f5-sdk module is required")
-
-    if not HAS_NETADDR:
-        raise F5ModuleError("The python netaddr module is required")
-
     spec = ArgumentSpec()
 
-    client = AnsibleF5Client(
+    module = AnsibleModule(
         argument_spec=spec.argument_spec,
-        supports_check_mode=spec.supports_check_mode,
-        f5_product_name=spec.f5_product_name
+        supports_check_mode=spec.supports_check_mode
     )
+    if not HAS_F5SDK:
+        module.fail_json(msg="The python f5-sdk module is required")
+    if not HAS_NETADDR:
+        module.fail_json(msg="The python netaddr module is required")
 
     try:
-        mm = ModuleManager(client)
+        client = F5Client(**module.params)
+        mm = ModuleManager(module=module, client=client)
         results = mm.exec_module()
         cleanup_tokens(client)
-        client.module.exit_json(**results)
-    except F5ModuleError as e:
+        module.exit_json(**results)
+    except F5ModuleError as ex:
         cleanup_tokens(client)
-        client.module.fail_json(msg=str(e))
+        module.fail_json(msg=str(ex))
 
 
 if __name__ == '__main__':

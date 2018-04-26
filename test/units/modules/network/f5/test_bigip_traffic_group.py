@@ -18,21 +18,24 @@ if sys.version_info < (2, 7):
 from ansible.compat.tests import unittest
 from ansible.compat.tests.mock import Mock
 from ansible.compat.tests.mock import patch
-from ansible.module_utils.f5_utils import AnsibleF5Client
-from ansible.module_utils.f5_utils import F5ModuleError
+from ansible.module_utils.basic import AnsibleModule
 
 try:
-    from library.bigip_traffic_group import Parameters
-    from library.bigip_traffic_group import ModuleManager
-    from library.bigip_traffic_group import ArgumentSpec
-    from ansible.module_utils.f5_utils import iControlUnexpectedHTTPError
+    from library.modules.bigip_traffic_group import ApiParameters
+    from library.modules.bigip_traffic_group import ModuleParameters
+    from library.modules.bigip_traffic_group import ModuleManager
+    from library.modules.bigip_traffic_group import ArgumentSpec
+    from library.module_utils.network.f5.common import F5ModuleError
+    from library.module_utils.network.f5.common import iControlUnexpectedHTTPError
     from test.unit.modules.utils import set_module_args
 except ImportError:
     try:
-        from ansible.modules.network.f5.bigip_traffic_group import Parameters
+        from ansible.modules.network.f5.bigip_traffic_group import ApiParameters
+        from ansible.modules.network.f5.bigip_traffic_group import ModuleParameters
         from ansible.modules.network.f5.bigip_traffic_group import ModuleManager
         from ansible.modules.network.f5.bigip_traffic_group import ArgumentSpec
-        from ansible.module_utils.f5_utils import iControlUnexpectedHTTPError
+        from ansible.module_utils.network.f5.common import F5ModuleError
+        from ansible.module_utils.network.f5.common import iControlUnexpectedHTTPError
         from units.modules.utils import set_module_args
     except ImportError:
         raise SkipTest("F5 Ansible modules require the f5-sdk Python library")
@@ -60,17 +63,37 @@ def load_fixture(name):
 
 
 class TestParameters(unittest.TestCase):
-    def test_module_parameters(self):
+    def test_module_parameters_1(self):
         args = dict(
-            name='foo'
+            name='foo',
+            mac_address=''
         )
 
-        p = Parameters(args)
+        p = ModuleParameters(params=args)
         assert p.name == 'foo'
+        assert p.mac_address == 'none'
+
+    def test_module_parameters_2(self):
+        args = dict(
+            mac_address='00:00:00:00:00:02'
+        )
+
+        p = ModuleParameters(params=args)
+        assert p.mac_address == '00:00:00:00:00:02'
+
+    def test_api_parameters_1(self):
+        args = load_fixture('load_tm_cm_traffic_group_1.json')
+
+        p = ApiParameters(params=args)
+        assert p.mac_address == 'none'
+
+    def test_api_parameters_2(self):
+        args = load_fixture('load_tm_cm_traffic_group_2.json')
+
+        p = ApiParameters(params=args)
+        assert p.mac_address == '00:00:00:00:00:02'
 
 
-@patch('ansible.module_utils.f5_utils.AnsibleF5Client._get_mgmt_root',
-       return_value=True)
 class TestManager(unittest.TestCase):
 
     def setUp(self):
@@ -84,13 +107,12 @@ class TestManager(unittest.TestCase):
             user='admin'
         ))
 
-        client = AnsibleF5Client(
+        module = AnsibleModule(
             argument_spec=self.spec.argument_spec,
-            supports_check_mode=self.spec.supports_check_mode,
-            f5_product_name=self.spec.f5_product_name
+            supports_check_mode=self.spec.supports_check_mode
         )
 
-        mm = ModuleManager(client)
+        mm = ModuleManager(module=module)
         mm.create_on_device = Mock(return_value=True)
         mm.exists = Mock(return_value=False)
 

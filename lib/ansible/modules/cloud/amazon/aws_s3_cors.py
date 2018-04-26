@@ -19,19 +19,17 @@ options:
     description:
       - Name of the s3 bucket
     required: true
-    default: null
   rules:
     description:
       - Cors rules to put on the s3 bucket
-    required: false
   state:
     description:
       - Create or remove cors on the s3 bucket
-    required: false
-    default: present
+    required: true
     choices: [ 'present', 'absent' ]
 extends_documentation_fragment:
     - aws
+    - ec2
 '''
 
 EXAMPLES = '''

@@ -41,6 +41,7 @@ options:
       - State of the L3 interface configuration.
     default: present
     choices: ['present', 'absent']
+extends_documentation_fragment: nxos
 """
 
 EXAMPLES = """
@@ -121,7 +122,6 @@ def map_obj_to_commands(updates, module):
                 if command:
                     command.append('exit')
                     command.insert(0, 'interface {0}'.format(name))
-                    command.insert(1, 'no switchport')
             commands.extend(command)
 
         elif state == 'present' and obj_in_have:
@@ -134,10 +134,8 @@ def map_obj_to_commands(updates, module):
                 if command:
                     command.append('exit')
                     command.insert(0, 'interface {0}'.format(name))
-                    command.insert(1, 'no switchport')
                 elif not ipv4 and not ipv6:
                     command.append('interface {0}'.format(name))
-                    command.append('no switchport')
             commands.extend(command)
 
     return commands

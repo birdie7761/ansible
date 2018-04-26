@@ -36,15 +36,12 @@ options:
     description:
       - BIG-IP session support; may be useful to avoid concurrency
         issues in certain circumstances.
-    required: false
-    default: true
-    choices: []
-    aliases: []
+    type: bool
+    default: 'yes'
   include:
     description:
       - Fact category or list of categories to collect
     required: true
-    default: null
     choices:
       - address_class
       - certificate
@@ -65,15 +62,10 @@ options:
       - virtual_address
       - virtual_server
       - vlan
-    aliases: []
   filter:
     description:
       - Shell-style glob matching string used to filter fact keys. Not
         applicable for software, provision, and system_info fact categories.
-    required: false
-    default: null
-    choices: []
-    aliases: []
 extends_documentation_fragment: f5
 '''
 
@@ -97,8 +89,13 @@ except ImportError:
     pass  # Handle via f5_utils.bigsuds_found
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.f5_utils import bigip_api, bigsuds_found, f5_argument_spec
+from ansible.module_utils.f5_utils import bigip_api, bigsuds_found
 from ansible.module_utils.six.moves import map, zip
+
+try:
+    from library.module_utils.network.f5.common import f5_argument_spec
+except ImportError:
+    from ansible.module_utils.network.f5.common import f5_argument_spec
 
 
 class F5(object):
@@ -1640,8 +1637,7 @@ def generate_provision_dict(f5):
 
 
 def main():
-    argument_spec = f5_argument_spec()
-
+    argument_spec = f5_argument_spec
     meta_args = dict(
         session=dict(type='bool', default=False),
         include=dict(type='list', required=True),

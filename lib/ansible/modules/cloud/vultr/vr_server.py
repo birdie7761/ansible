@@ -67,6 +67,10 @@ options:
   user_data:
     description:
       - User data to be passed to the server.
+  startup_script:
+    description:
+      - Name of the startup script to execute on boot.
+      - Only considered while creating the server.
   ssh_keys:
     description:
       - List of SSH keys passed to the server on creation.
@@ -151,6 +155,16 @@ vultr_api:
       returned: success
       type: int
       sample: 60
+    api_retries:
+      description: Amount of max retries for the API requests
+      returned: success
+      type: int
+      sample: 5
+    api_endpoint:
+      description: Endpoint used for the API requests
+      returned: success
+      type: string
+      sample: "https://api.vultr.com"
 vultr_server:
   description: Response from Vultr API with a few additions/modification
   returned: success
@@ -159,7 +173,7 @@ vultr_server:
     id:
       description: ID of the server
       returned: success
-      type: int
+      type: string
       sample: 10194376
     name:
       description: Name (label) of the server
@@ -306,6 +320,7 @@ vultr_server:
 import time
 import base64
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils._text import to_text, to_bytes
 from ansible.module_utils.vultr import (
     Vultr,
     vultr_argument_spec,
@@ -319,7 +334,7 @@ class AnsibleVultrServer(Vultr):
 
         self.server = None
         self.returns = {
-            'SUBID': dict(key='id', convert_to='int'),
+            'SUBID': dict(key='id'),
             'label': dict(key='name'),
             'date_created': dict(),
             'allowed_bandwidth_gb': dict(convert_to='int'),
@@ -351,61 +366,49 @@ class AnsibleVultrServer(Vultr):
         }
         self.server_power_state = None
 
-    def get_os(self):
-        name = self.module.params.get('os')
-        if not name:
-            return {}
-
+    def get_startup_script(self):
         return self.query_resource_by_key(
             key='name',
-            value=name,
+            value=self.module.params.get('startup_script'),
+            resource='startupscript',
+        )
+
+    def get_os(self):
+        return self.query_resource_by_key(
+            key='name',
+            value=self.module.params.get('os'),
             resource='os',
             use_cache=True
         )
 
     def get_ssh_key(self):
-        name = self.module.params.get('ssh_key')
-        if not name:
-            return {}
-
         return self.query_resource_by_key(
             key='name',
-            value=name,
+            value=self.module.params.get('ssh_key'),
             resource='sshkey',
             use_cache=True
         )
 
     def get_region(self):
-        name = self.module.params.get('region')
-        if not name:
-            return {}
-
         return self.query_resource_by_key(
             key='name',
-            value=name,
+            value=self.module.params.get('region'),
             resource='regions',
             use_cache=True
         )
 
     def get_plan(self):
-        name = self.module.params.get('plan')
-        if not name:
-            return {}
-
         return self.query_resource_by_key(
             key='name',
-            value=name,
+            value=self.module.params.get('plan'),
             resource='plans',
             use_cache=True
         )
 
     def get_firewall_group(self):
-        name = self.module.params.get('firewall_group')
-        if not name:
-            return {}
         return self.query_resource_by_key(
             key='description',
-            value=name,
+            value=self.module.params.get('firewall_group'),
             resource='firewall',
             query_by='group_list'
         )
@@ -413,7 +416,7 @@ class AnsibleVultrServer(Vultr):
     def get_user_data(self):
         user_data = self.module.params.get('user_data')
         if user_data is not None:
-            user_data = base64.b64encode(str(user_data))
+            user_data = to_text(base64.b64encode(to_bytes(user_data)))
         return user_data
 
     def get_server_user_data(self, server):
@@ -492,6 +495,7 @@ class AnsibleVultrServer(Vultr):
                 'tag': self.module.params.get('tag'),
                 'reserved_ip_v4': self.module.params.get('reserved_ip_v4'),
                 'user_data': self.get_user_data(),
+                'SCRIPTID': self.get_startup_script().get('SCRIPTID'),
             }
             self.api_query(
                 path="/v1/server/create",
@@ -835,6 +839,7 @@ def main():
         tag=dict(),
         reserved_ip_v4=dict(),
         firewall_group=dict(),
+        startup_script=dict(),
         user_data=dict(),
         ssh_keys=dict(type='list', aliases=['ssh_key']),
         region=dict(),

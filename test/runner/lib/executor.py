@@ -45,7 +45,6 @@ from lib.util import (
     make_dirs,
     is_shippable,
     is_binary_file,
-    find_pip,
     find_executable,
     raw_command,
     get_coverage_path,
@@ -63,7 +62,6 @@ from lib.target import (
     walk_network_integration_targets,
     walk_windows_integration_targets,
     walk_units_targets,
-    walk_compile_targets,
 )
 
 from lib.changes import (
@@ -82,7 +80,6 @@ from lib.classification import (
 from lib.config import (
     TestConfig,
     EnvironmentConfig,
-    CompileConfig,
     IntegrationConfig,
     NetworkIntegrationConfig,
     PosixIntegrationConfig,
@@ -91,11 +88,8 @@ from lib.config import (
     WindowsIntegrationConfig,
 )
 
-from lib.test import (
-    TestMessage,
-    TestSuccess,
-    TestFailure,
-    TestSkipped,
+from lib.metadata import (
+    ChangeDescription,
 )
 
 SUPPORTED_PYTHON_VERSIONS = (
@@ -105,8 +99,6 @@ SUPPORTED_PYTHON_VERSIONS = (
     '3.6',
     '3.7',
 )
-
-COMPILE_PYTHON_VERSIONS = SUPPORTED_PYTHON_VERSIONS
 
 
 def check_startup():
@@ -151,6 +143,9 @@ def install_command_requirements(args):
     if not args.requirements:
         return
 
+    if isinstance(args, ShellConfig):
+        return
+
     packages = []
 
     if isinstance(args, TestConfig):
@@ -159,7 +154,7 @@ def install_command_requirements(args):
         if args.junit:
             packages.append('junit-xml')
 
-    pip = find_pip(version=args.python_version)
+    pip = args.pip_command
 
     commands = [generate_pip_install(pip, args.command, packages=packages)]
 
@@ -191,7 +186,7 @@ def install_command_requirements(args):
 def run_pip_commands(args, pip, commands, detect_pip_changes=False):
     """
     :type args: EnvironmentConfig
-    :type pip: str
+    :type pip: list[str]
     :type commands: list[list[str]]
     :type detect_pip_changes: bool
     :rtype: list[list[str]]
@@ -218,7 +213,7 @@ def run_pip_commands(args, pip, commands, detect_pip_changes=False):
             # AttributeError: 'Requirement' object has no attribute 'project_name'
             # See: https://bugs.launchpad.net/ubuntu/xenial/+source/python-pip/+bug/1626258
             # Upgrading pip works around the issue.
-            run_command(args, [pip, 'install', '--upgrade', 'pip'])
+            run_command(args, pip + ['install', '--upgrade', 'pip'])
             run_command(args, cmd)
 
         after_list = pip_list(args, pip) if detect_pip_changes else None
@@ -232,10 +227,10 @@ def run_pip_commands(args, pip, commands, detect_pip_changes=False):
 def pip_list(args, pip):
     """
     :type args: EnvironmentConfig
-    :type pip: str
+    :type pip: list[str]
     :rtype: str
     """
-    stdout, _ = run_command(args, [pip, 'list'], capture=True)
+    stdout, _ = run_command(args, pip + ['list'], capture=True)
     return stdout
 
 
@@ -246,12 +241,12 @@ def generate_egg_info(args):
     if os.path.isdir('lib/ansible.egg-info'):
         return
 
-    run_command(args, ['python%s' % args.python_version, 'setup.py', 'egg_info'], capture=args.verbosity < 3)
+    run_command(args, [args.python_executable, 'setup.py', 'egg_info'], capture=args.verbosity < 3)
 
 
 def generate_pip_install(pip, command, packages=None):
     """
-    :type pip: str
+    :type pip: list[str]
     :type command: str
     :type packages: list[str] | None
     :rtype: list[str] | None
@@ -270,7 +265,7 @@ def generate_pip_install(pip, command, packages=None):
     if not options:
         return None
 
-    return [pip, 'install', '--disable-pip-version-check', '-c', constraints] + options
+    return pip + ['install', '--disable-pip-version-check', '-c', constraints] + options
 
 
 def command_shell(args):
@@ -731,6 +726,9 @@ def command_integration_filtered(args, targets, all_targets):
                 tries -= 1
 
                 try:
+                    if cloud_environment:
+                        cloud_environment.setup_once()
+
                     run_setup_targets(args, test_dir, target.setup_once, all_targets_dict, setup_targets_executed, False)
 
                     start_time = time.time()
@@ -777,7 +775,12 @@ def command_integration_filtered(args, targets, all_targets):
                     display.warning('Retrying test target "%s" with maximum verbosity.' % target.name)
                     display.verbosity = args.verbosity = 6
 
+            start_time = time.time()
             original_environment.validate(target.name, throw=True)
+            end_time = time.time()
+
+            results[target.name]['validation_seconds'] = int(end_time - start_time)
+
             passed.append(target)
         except Exception as ex:
             failed.append(target)
@@ -814,12 +817,12 @@ def command_integration_filtered(args, targets, all_targets):
 
 def run_setup_targets(args, test_dir, target_names, targets_dict, targets_executed, always):
     """
-    :param args: IntegrationConfig
-    :param test_dir: str
-    :param target_names: list[str]
-    :param targets_dict: dict[str, IntegrationTarget]
-    :param targets_executed: set[str]
-    :param always: bool
+    :type args: IntegrationConfig
+    :type test_dir: str
+    :type target_names: list[str]
+    :type targets_dict: dict[str, IntegrationTarget]
+    :type targets_executed: set[str]
+    :type always: bool
     """
     for target_name in target_names:
         if not always and target_name in targets_executed:
@@ -949,6 +952,10 @@ def command_integration_role(args, target, start_at_task):
         if args.diff:
             cmd += ['--diff']
 
+        if isinstance(args, NetworkIntegrationConfig):
+            if args.testcase:
+                cmd += ['-e', 'testcase=%s' % args.testcase]
+
         if args.verbosity:
             cmd.append('-' + ('v' * args.verbosity))
 
@@ -1019,114 +1026,6 @@ def command_units(args):
                 raise
 
 
-def command_compile(args):
-    """
-    :type args: CompileConfig
-    """
-    changes = get_changes_filter(args)
-    require = (args.require or []) + changes
-    include, exclude = walk_external_targets(walk_compile_targets(), args.include, args.exclude, require)
-
-    if not include:
-        raise AllTargetsSkipped()
-
-    if args.delegate:
-        raise Delegate(require=changes)
-
-    install_command_requirements(args)
-
-    total = 0
-    failed = []
-
-    for version in COMPILE_PYTHON_VERSIONS:
-        # run all versions unless version given, in which case run only that version
-        if args.python and version != args.python_version:
-            continue
-
-        display.info('Compile with Python %s' % version)
-
-        result = compile_version(args, version, include, exclude)
-        result.write(args)
-
-        total += 1
-
-        if isinstance(result, TestFailure):
-            failed.append('compile --python %s' % version)
-
-    if failed:
-        message = 'The %d compile test(s) listed below (out of %d) failed. See error output above for details.\n%s' % (
-            len(failed), total, '\n'.join(failed))
-
-        if args.failure_ok:
-            display.error(message)
-        else:
-            raise ApplicationError(message)
-
-
-def compile_version(args, python_version, include, exclude):
-    """
-    :type args: CompileConfig
-    :type python_version: str
-    :type include: tuple[CompletionTarget]
-    :type exclude: tuple[CompletionTarget]
-    :rtype: TestResult
-    """
-    command = 'compile'
-    test = ''
-
-    # optional list of regex patterns to exclude from tests
-    skip_file = 'test/compile/python%s-skip.txt' % python_version
-
-    if os.path.exists(skip_file):
-        with open(skip_file, 'r') as skip_fd:
-            skip_paths = skip_fd.read().splitlines()
-    else:
-        skip_paths = []
-
-    # augment file exclusions
-    skip_paths += [e.path for e in exclude]
-
-    skip_paths = sorted(skip_paths)
-
-    python = 'python%s' % python_version
-    cmd = [python, 'test/compile/compile.py']
-
-    if skip_paths:
-        cmd += ['-x', '|'.join(skip_paths)]
-
-    cmd += [target.path if target.path == '.' else './%s' % target.path for target in include]
-
-    try:
-        stdout, stderr = run_command(args, cmd, capture=True)
-        status = 0
-    except SubprocessError as ex:
-        stdout = ex.stdout
-        stderr = ex.stderr
-        status = ex.status
-
-    if stderr:
-        raise SubprocessError(cmd=cmd, status=status, stderr=stderr, stdout=stdout)
-
-    if args.explain:
-        return TestSkipped(command, test, python_version=python_version)
-
-    pattern = r'^(?P<path>[^:]*):(?P<line>[0-9]+):(?P<column>[0-9]+): (?P<message>.*)$'
-
-    results = [re.search(pattern, line).groupdict() for line in stdout.splitlines()]
-
-    results = [TestMessage(
-        message=r['message'],
-        path=r['path'].replace('./', ''),
-        line=int(r['line']),
-        column=int(r['column']),
-    ) for r in results]
-
-    if results:
-        return TestFailure(command, test, messages=results, python_version=python_version)
-
-    return TestSuccess(command, test, python_version=python_version)
-
-
 def get_changes_filter(args):
     """
     :type args: TestConfig
@@ -1134,23 +1033,24 @@ def get_changes_filter(args):
     """
     paths = detect_changes(args)
 
+    if not args.metadata.change_description:
+        if paths:
+            changes = categorize_changes(args, paths, args.command)
+        else:
+            changes = ChangeDescription()
+
+        args.metadata.change_description = changes
+
     if paths is None:
         return []  # change detection not enabled, do not filter targets
 
     if not paths:
         raise NoChangesDetected()
 
-    commands = categorize_changes(args, paths, args.command)
-
-    targets = commands.get(args.command)
-
-    if targets is None:
+    if args.metadata.change_description.targets is None:
         raise NoTestsForChanges()
 
-    if targets == ['all']:
-        return []  # changes require testing all targets, do not filter targets
-
-    return targets
+    return args.metadata.change_description.targets
 
 
 def detect_changes(args):
@@ -1280,6 +1180,49 @@ def get_integration_filter(args, targets):
     return get_integration_local_filter(args, targets)
 
 
+def common_integration_filter(args, targets, exclude):
+    """
+    :type args: IntegrationConfig
+    :type targets: tuple[IntegrationTarget]
+    :type exclude: list[str]
+    """
+    override_disabled = set(target for target in args.include if target.startswith('disabled/'))
+
+    if not args.allow_disabled:
+        skip = 'disabled/'
+        override = [target.name for target in targets if override_disabled & set(target.aliases)]
+        skipped = [target.name for target in targets if skip in target.aliases and target.name not in override]
+        if skipped:
+            exclude.extend(skipped)
+            display.warning('Excluding tests marked "%s" which require --allow-disabled or prefixing with "disabled/": %s'
+                            % (skip.rstrip('/'), ', '.join(skipped)))
+
+    override_unsupported = set(target for target in args.include if target.startswith('unsupported/'))
+
+    if not args.allow_unsupported:
+        skip = 'unsupported/'
+        override = [target.name for target in targets if override_unsupported & set(target.aliases)]
+        skipped = [target.name for target in targets if skip in target.aliases and target.name not in override]
+        if skipped:
+            exclude.extend(skipped)
+            display.warning('Excluding tests marked "%s" which require --allow-unsupported or prefixing with "unsupported/": %s'
+                            % (skip.rstrip('/'), ', '.join(skipped)))
+
+    override_unstable = set(target for target in args.include if target.startswith('unstable/'))
+
+    if args.allow_unstable_changed:
+        override_unstable |= set(args.metadata.change_description.focused_targets or [])
+
+    if not args.allow_unstable:
+        skip = 'unstable/'
+        override = [target.name for target in targets if override_unstable & set(target.aliases)]
+        skipped = [target.name for target in targets if skip in target.aliases and target.name not in override]
+        if skipped:
+            exclude.extend(skipped)
+            display.warning('Excluding tests marked "%s" which require --allow-unstable or prefixing with "unstable/": %s'
+                            % (skip.rstrip('/'), ', '.join(skipped)))
+
+
 def get_integration_local_filter(args, targets):
     """
     :type args: IntegrationConfig
@@ -1288,23 +1231,25 @@ def get_integration_local_filter(args, targets):
     """
     exclude = []
 
-    if os.getuid() != 0:
+    common_integration_filter(args, targets, exclude)
+
+    if not args.allow_root and os.getuid() != 0:
         skip = 'needs/root/'
         skipped = [target.name for target in targets if skip in target.aliases]
         if skipped:
             exclude.append(skip)
-            display.warning('Excluding tests marked "%s" which require running as root: %s'
+            display.warning('Excluding tests marked "%s" which require --allow-root or running as root: %s'
                             % (skip.rstrip('/'), ', '.join(skipped)))
 
-    # consider explicit testing of destructive as though --allow-destructive was given
-    include_destructive = any(target.startswith('destructive/') for target in args.include)
+    override_destructive = set(target for target in args.include if target.startswith('destructive/'))
 
-    if not args.allow_destructive and not include_destructive:
+    if not args.allow_destructive:
         skip = 'destructive/'
-        skipped = [target.name for target in targets if skip in target.aliases]
+        override = [target.name for target in targets if override_destructive & set(target.aliases)]
+        skipped = [target.name for target in targets if skip in target.aliases and target.name not in override]
         if skipped:
-            exclude.append(skip)
-            display.warning('Excluding tests marked "%s" which require --allow-destructive to run locally: %s'
+            exclude.extend(skipped)
+            display.warning('Excluding tests marked "%s" which require --allow-destructive or prefixing with "destructive/" to run locally: %s'
                             % (skip.rstrip('/'), ', '.join(skipped)))
 
     if args.python_version.startswith('3'):
@@ -1330,6 +1275,8 @@ def get_integration_docker_filter(args, targets):
     """
     exclude = []
 
+    common_integration_filter(args, targets, exclude)
+
     if not args.docker_privileged:
         skip = 'needs/privileged/'
         skipped = [target.name for target in targets if skip in target.aliases]
@@ -1338,12 +1285,14 @@ def get_integration_docker_filter(args, targets):
             display.warning('Excluding tests marked "%s" which require --docker-privileged to run under docker: %s'
                             % (skip.rstrip('/'), ', '.join(skipped)))
 
+    docker_image = args.docker.split('@')[0]  # strip SHA for proper tag comparison
+
     python_version = 2  # images are expected to default to python 2 unless otherwise specified
 
-    if args.docker.endswith('py3'):
+    if docker_image.endswith('py3'):
         python_version = 3  # docker images ending in 'py3' are expected to default to python 3
 
-    if args.docker.endswith(':default'):
+    if docker_image.endswith(':default'):
         python_version = 3  # docker images tagged 'default' are expected to default to python 3
 
     if args.python:  # specifying a numeric --python option overrides the default python
@@ -1373,6 +1322,8 @@ def get_integration_remote_filter(args, targets):
     platform = parts[0]
 
     exclude = []
+
+    common_integration_filter(args, targets, exclude)
 
     skip = 'skip/%s/' % platform
     skipped = [target.name for target in targets if skip in target.aliases]

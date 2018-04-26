@@ -159,6 +159,17 @@ BECOME_ALLOW_SAME_USER:
   - {key: become_allow_same_user, section: privilege_escalation}
   type: boolean
   yaml: {key: privilege_escalation.become_allow_same_user}
+AGNOSTIC_BECOME_PROMPT:
+  # TODO: Switch the default to True in either the Ansible 2.6 release or the 2.7 release, whichever happens after the Tower 3.3 release
+  name: Display an agnostic become prompt
+  default: False
+  type: boolean
+  description: Display an agnostic become prompt instead of displaying a prompt containing the command line supplied become method
+  env: [{name: ANSIBLE_AGNOSTIC_BECOME_PROMPT}]
+  ini:
+    - {key: agnostic_become_prompt, section: privilege_escalation}
+  yaml: {key: privilege_escalation.agnostic_become_prompt}
+  version_added: "2.5"
 CACHE_PLUGIN:
   name: Persistent Cache plugin
   default: memory
@@ -249,7 +260,7 @@ COLOR_ERROR:
 COLOR_HIGHLIGHT:
   name: Color for highlighting
   default: white
-  description: Color used for highlights
+  description: Defines the color to use for highlighting
   env: [{name: ANSIBLE_COLOR_HIGHLIGHT}]
   ini:
   - {key: highlight, section: colors}
@@ -304,7 +315,7 @@ COMMAND_WARNINGS:
   default: True
   description:
     - By default Ansible will issue a warning when the shell or command module is used and the command appears to be similar to an existing Ansible module.
-    - These warnings can be silenced by adjusting this setting to False. You can also control this at the task level with the module optoin ``warn``.
+    - These warnings can be silenced by adjusting this setting to False. You can also control this at the task level with the module option ``warn``.
   env: [{name: ANSIBLE_COMMAND_WARNINGS}]
   ini:
   - {key: command_warnings, section: defaults}
@@ -349,7 +360,7 @@ DEFAULT_ASK_SUDO_PASS:
   name: Ask for the sudo password
   default: False
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_ask_pass.
     version: "2.8"
     alternatives: become
   description:
@@ -362,7 +373,7 @@ DEFAULT_ASK_SU_PASS:
   name: Ask for the su password
   default: False
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_ask_pass.
     version: "2.8"
     alternatives: become
   description:
@@ -462,6 +473,14 @@ DEFAULT_CALLBACK_WHITELIST:
   - {key: callback_whitelist, section: defaults}
   type: list
   yaml: {key: plugins.callback.whitelist}
+DEFAULT_CLICONF_PLUGIN_PATH:
+  name: Cliconf Plugins Path
+  default: ~/.ansible/plugins/cliconf:/usr/share/ansible/plugins/cliconf
+  description: Colon separated paths in which Ansible will search for Cliconf Plugins.
+  env: [{name: ANSIBLE_CLICONF_PLUGINS}]
+  ini:
+  - {key: cliconf_plugins, section: defaults}
+  type: pathspec
 DEFAULT_CONNECTION_PLUGIN_PATH:
   name: Connection Plugins Path
   default: ~/.ansible/plugins/connection:/usr/share/ansible/plugins/connection
@@ -474,7 +493,11 @@ DEFAULT_CONNECTION_PLUGIN_PATH:
 DEFAULT_DEBUG:
   name: Debug mode
   default: False
-  description: Toggles debug output in Ansible, VERY verbose and can hinder multiprocessing.
+  description:
+    - "Toggles debug output in Ansible. This is *very* verbose and can hinder
+      multiprocessing.  Debug output can also include secret information
+      despite no_log settings being enabled, which means debug mode should not be used in 
+      production."
   env: [{name: ANSIBLE_DEBUG}]
   ini:
   - {key: debug, section: defaults}
@@ -699,6 +722,14 @@ DEFAULT_LOG_PATH:
   ini:
   - {key: log_path, section: defaults}
   type: path
+DEFAULT_LOG_FILTER:
+  name: Name filters for python logger
+  default: []
+  description: List of logger names to filter out of the log file
+  env: [{name: ANSIBLE_LOG_FILTER}]
+  ini:
+    - {key: log_filter, section: defaults}
+  type: list
 DEFAULT_LOOKUP_PLUGIN_PATH:
   name: Lookup Plugins Path
   description: Colon separated paths in which Ansible will search for Lookup Plugins.
@@ -711,7 +742,7 @@ DEFAULT_LOOKUP_PLUGIN_PATH:
 DEFAULT_MANAGED_STR:
   name: Ansible managed
   default: 'Ansible managed'
-  description: Sets the macro for the 'ansible_managed' variable available for M(template) tasks.
+  description: Sets the macro for the 'ansible_managed' variable available for M(template) and M(win_template) modules.  This is only relevant for those two modules.
   env: []
   ini:
   - {key: ansible_managed, section: defaults}
@@ -735,13 +766,17 @@ DEFAULT_MODULE_COMPRESSION:
 #   - name: ansible_module_compression
 DEFAULT_MODULE_LANG:
   name: Target language environment
-  default: "{{CONTROLER_LANG}}"
-  description: "Language locale setting to use for modules when they execute on the target, if empty it defaults to 'en_US.UTF-8'"
+  default: "{{ CONTROLLER_LANG }}"
+  description:
+    - "Language locale setting to use for modules when they execute on the target."
+    - "If empty it tries to set itself to the LANG environment variable on the controller."
+    - "This is only used if DEFAULT_MODULE_SET_LOCALE is set to true"
   env: [{name: ANSIBLE_MODULE_LANG}]
   ini:
   - {key: module_lang, section: defaults}
-# vars:
-#   - name: ansible_module_lang
+  deprecated:
+    why: Modules are coded to set their own locale if needed for screenscraping
+    version: "2.9"
 DEFAULT_MODULE_NAME:
   name: Default adhoc module
   default: command
@@ -760,13 +795,15 @@ DEFAULT_MODULE_PATH:
 DEFAULT_MODULE_SET_LOCALE:
   name: Target locale
   default: False
-  description: Controls if we set locale for modules when executing on the target.
+  description:
+    - Controls if we set locale for modules when executing on the target.
   env: [{name: ANSIBLE_MODULE_SET_LOCALE}]
   ini:
   - {key: module_set_locale, section: defaults}
   type: boolean
-# vars:
-#   - name: ansible_module_locale
+  deprecated:
+    why: Modules are coded to set their own locale if needed for screenscraping
+    version: "2.9"
 DEFAULT_MODULE_UTILS_PATH:
   name: Module Utils Path
   description: Colon separated paths in which Ansible will search for Module utils files, which are shared by modules.
@@ -774,6 +811,14 @@ DEFAULT_MODULE_UTILS_PATH:
   env: [{name: ANSIBLE_MODULE_UTILS}]
   ini:
   - {key: module_utils, section: defaults}
+  type: pathspec
+DEFAULT_NETCONF_PLUGIN_PATH:
+  name: Netconf Plugins Path
+  default: ~/.ansible/plugins/netconf:/usr/share/ansible/plugins/netconf
+  description: Colon separated paths in which Ansible will search for Netconf Plugins.
+  env: [{name: ANSIBLE_NETCONF_PLUGINS}]
+  ini:
+  - {key: netconf_plugins, section: defaults}
   type: pathspec
 DEFAULT_NO_LOG:
   name: No log
@@ -825,7 +870,10 @@ DEFAULT_PRIVATE_KEY_FILE:
 DEFAULT_PRIVATE_ROLE_VARS:
   name: Private role variables
   default: False
-  description: ''
+  description:
+    - Makes role variables inaccessible from other roles.
+    - This was introduced as a way to reset role variables to default values if
+      a role is used more than once in a playbook.
   env: [{name: ANSIBLE_PRIVATE_ROLE_VARS}]
   ini:
   - {key: private_role_vars, section: defaults}
@@ -840,17 +888,6 @@ DEFAULT_REMOTE_PORT:
   - {key: remote_port, section: defaults}
   type: integer
   yaml: {key: defaults.remote_port}
-DEFAULT_REMOTE_TMP:
-  name: Target temporary directory
-  default: ~/.ansible/tmp
-  description:
-    - Temporary directory to use on targets when executing tasks.
-    - In some cases Ansible may still choose to use a system temporary dir to avoid permission issues.
-  env: [{name: ANSIBLE_REMOTE_TEMP}]
-  ini:
-  - {key: remote_tmp, section: defaults}
-  vars:
-    - name: ansible_remote_tmp
 DEFAULT_REMOTE_USER:
   name: Login/Remote User
   default:
@@ -971,7 +1008,7 @@ DEFAULT_SU:
 DEFAULT_SUDO:
   default: False
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework
     version: "2.8"
     alternatives: become
   description: 'Toggle the use of "sudo" for tasks.'
@@ -983,7 +1020,7 @@ DEFAULT_SUDO_EXE:
   name: sudo executable
   default: sudo
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_exe.
     version: "2.8"
     alternatives: become
   description: 'specify an "sudo" executable, otherwise it relies on PATH.'
@@ -994,7 +1031,7 @@ DEFAULT_SUDO_FLAGS:
   name: sudo flags
   default: '-H -S -n'
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_flags.
     version: "2.8"
     alternatives: become
   description: 'Flags to pass to "sudo"'
@@ -1005,7 +1042,7 @@ DEFAULT_SUDO_USER:
   name: sudo user
   default:
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_user.
     version: "2.8"
     alternatives: become
   description: 'User you become when using "sudo", leaving it blank will use the default configured on the target (normally root)'
@@ -1016,7 +1053,7 @@ DEFAULT_SU_EXE:
   name: su executable
   default: su
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_exe.
     version: "2.8"
     alternatives: become
   description: 'specify an "su" executable, otherwise it relies on PATH.'
@@ -1027,7 +1064,7 @@ DEFAULT_SU_FLAGS:
   name: su flags
   default: ''
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_flags.
     version: "2.8"
     alternatives: become
   description: 'Flags to pass to su'
@@ -1042,7 +1079,7 @@ DEFAULT_SU_USER:
   ini:
   - {key: su_user, section: defaults}
   deprecated:
-    why: In favor of become which is a generic framework
+    why: In favor of Ansible Become, which is a generic framework. See become_user.
     version: "2.8"
     alternatives: become
 DEFAULT_SYSLOG_FACILITY:
@@ -1066,6 +1103,14 @@ DEFAULT_TASK_INCLUDES_STATIC:
     why: include itself is deprecated and this setting will not matter in the future
     version: "2.8"
     alternatives: None, as its already built into the decision between include_tasks and import_tasks
+DEFAULT_TERMINAL_PLUGIN_PATH:
+  name: Terminal Plugins Path
+  default: ~/.ansible/plugins/terminal:/usr/share/ansible/plugins/terminal
+  description: Colon separated paths in which Ansible will search for Terminal Plugins.
+  env: [{name: ANSIBLE_TERMINAL_PLUGINS}]
+  ini:
+  - {key: terminal_plugins, section: defaults}
+  type: pathspec
 DEFAULT_TEST_PLUGIN_PATH:
   name: Jinja2 Test Plugins Path
   description: Colon separated paths in which Ansible will search for Jinja2 Test Plugins.
@@ -1133,6 +1178,14 @@ DEFAULT_VAULT_IDENTITY:
   ini:
   - {key: vault_identity, section: defaults}
   yaml: {key: defaults.vault_identity}
+DEFAULT_VAULT_ENCRYPT_IDENTITY:
+  name: Vault id to use for encryption
+  default:
+  description: 'The vault_id to use for encrypting by default. If multiple vault_ids are provided, this specifies which to use for encryption. The --encrypt-vault-id cli option overrides the configured value.'
+  env: [{name: ANSIBLE_VAULT_ENCRYPT_IDENTITY}]
+  ini:
+  - {key: vault_encrypt_identity, section: defaults}
+  yaml: {key: defaults.vault_encrypt_identity}
 DEFAULT_VAULT_IDENTITY_LIST:
   name: Default vault ids
   default: []
@@ -1261,6 +1314,13 @@ GALAXY_SERVER:
   ini:
   - {key: server, section: galaxy}
   yaml: {key: galaxy.server}
+GALAXY_TOKEN:
+  default: null
+  description: "GitHub personal access token"
+  env: [{name: ANSIBLE_GALAXY_TOKEN}]
+  ini:
+  - {key: token, section: galaxy}
+  yaml: {key: galaxy.token}
 HOST_KEY_CHECKING:
   name: Check host keys
   default: True
@@ -1277,6 +1337,14 @@ INVENTORY_ENABLED:
   ini:
   - {key: enable_plugins, section: inventory}
   type: list
+INVENTORY_EXPORT:
+  name: Set ansible-inventory into export mode
+  default: False
+  description: Controls if ansible-inventory will accurately reflect Ansible's view into inventory or its optimized for exporting.
+  env: [{name: ANSIBLE_INVENTORY_EXPORT}]
+  ini:
+  - {key: export, section: inventory}
+  type: bool
 INVENTORY_IGNORE_EXTS:
   name: Inventory ignore extensions
   default: "{{(BLACKLIST_EXTS + ( '~', '.orig', '.ini', '.cfg', '.retry'))}}"
@@ -1325,7 +1393,7 @@ MERGE_MULTIPLE_CLI_TAGS:
   version_added: "2.3"
 NETWORK_GROUP_MODULES:
   name: Network module families
-  default: [eos, nxos, ios, iosxr, junos, enos, ce, vyos, sros, dellos9, dellos10, dellos6, asa, aruba, aireos, bigip, ironware, mlnxos]
+  default: [eos, nxos, ios, iosxr, junos, enos, ce, vyos, sros, dellos9, dellos10, dellos6, asa, aruba, aireos, bigip, ironware, onyx]
   description: 'TODO: write it'
   env: [{name: NETWORK_GROUP_MODULES}]
   ini:
@@ -1403,6 +1471,17 @@ PLAYBOOK_VARS_ROOT:
   ini:
   - {key: playbook_vars_root, section: defaults}
   choices: [ top, bottom, all ]
+PLUGIN_FILTERS_CFG:
+  name: Config file for limiting valid plugins
+  default: null
+  version_added: "2.5.0"
+  description:
+    - "A path to configuration for filtering which plugins installed on the system are allowed to be used."
+    - "See :ref:`plugin_filtering_config` for details of the filter file's format."
+    - " The default is /etc/ansible/plugin_filters.yml"
+  ini:
+  - key: plugin_filters_cfg
+    section: default
 RETRY_FILES_ENABLED:
   name: Retry files
   default: True

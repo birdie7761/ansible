@@ -48,8 +48,6 @@ class IncludeRole(TaskInclude):
     OTHER_ARGS = ('private', 'allow_duplicates')  # assigned to matching property
     VALID_ARGS = tuple(frozenset(BASE + FROM_ARGS + OTHER_ARGS))  # all valid args
 
-    _inheritable = False
-
     # =================================================================================
     # ATTRIBUTES
 
@@ -112,12 +110,12 @@ class IncludeRole(TaskInclude):
         # name is needed, or use role as alias
         ir._role_name = ir.args.get('name', ir.args.get('role'))
         if ir._role_name is None:
-            raise AnsibleParserError("'name' is a required field for include_role.")
+            raise AnsibleParserError("'name' is a required field for %s." % ir.action)
 
         # validate bad args, otherwise we silently ignore
         bad_opts = my_arg_names.difference(IncludeRole.VALID_ARGS)
         if bad_opts:
-            raise AnsibleParserError('Invalid options for include_role: %s' % ','.join(list(bad_opts)))
+            raise AnsibleParserError('Invalid options for %s: %s' % (ir.action, ','.join(list(bad_opts))))
 
         # build options for role includes
         for key in my_arg_names.intersection(IncludeRole.FROM_ARGS):

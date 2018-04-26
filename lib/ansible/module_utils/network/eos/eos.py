@@ -32,7 +32,7 @@ import time
 
 from ansible.module_utils._text import to_text, to_native
 from ansible.module_utils.basic import env_fallback, return_values
-from ansible.module_utils.connection import exec_command
+from ansible.module_utils.connection import Connection, ConnectionError
 from ansible.module_utils.network.common.utils import to_list, ComplexList
 from ansible.module_utils.six import iteritems
 from ansible.module_utils.urls import fetch_url
@@ -112,19 +112,35 @@ class Cli:
         self._module = module
         self._device_configs = {}
         self._session_support = None
+        self._connection = None
+
+    def _get_connection(self):
+        if self._connection:
+            return self._connection
+        self._connection = Connection(self._module._socket_path)
+
+        return self._connection
+
+    def close_session(self, session):
+        conn = self._get_connection()
+        # to close session gracefully execute abort in top level session prompt.
+        conn.get('end')
+        conn.get('configure session %s' % session)
+        conn.get('abort')
 
     @property
     def supports_sessions(self):
         if self._session_support is not None:
             return self._session_support
-        rc, out, err = self.exec_command('show configuration sessions')
-        self._session_support = rc == 0
-        return self._session_support
+        conn = self._get_connection()
 
-    def exec_command(self, command):
-        if isinstance(command, dict):
-            command = self._module.jsonify(command)
-        return exec_command(self._module, command)
+        self._session_support = True
+        try:
+            out = conn.get('show configuration sessions')
+        except:
+            self._session_support = False
+
+        return self._session_support
 
     def get_config(self, flags=None):
         """Retrieves the current config from the device or cache
@@ -138,12 +154,9 @@ class Cli:
         try:
             return self._device_configs[cmd]
         except KeyError:
-            conn = get_connection(self)
-            rc, out, err = self.exec_command(cmd)
-            out = to_text(out, errors='surrogate_then_replace')
-            if rc != 0:
-                self._module.fail_json(msg=to_text(err, errors='surrogate_then_replace'))
-            cfg = str(out).strip()
+            conn = self._get_connection()
+            out = conn.get_config(flags=flags)
+            cfg = to_text(out, errors='surrogate_then_replace').strip()
             self._device_configs[cmd] = cfg
             return cfg
 
@@ -151,12 +164,20 @@ class Cli:
         """Run list of commands on remote device and return results
         """
         responses = list()
+        connection = self._get_connection()
 
         for cmd in to_list(commands):
-            rc, out, err = self.exec_command(cmd)
-            out = to_text(out, errors='surrogate_then_replace')
-            if check_rc and rc != 0:
-                self._module.fail_json(msg=to_text(err, errors='surrogate_then_replace'))
+            if isinstance(cmd, dict):
+                command = cmd['command']
+                prompt = cmd['prompt']
+                answer = cmd['answer']
+            else:
+                command = cmd
+                prompt = None
+                answer = None
+
+            out = connection.get(command, prompt, answer)
+            out = to_text(out, errors='surrogate_or_strict')
 
             try:
                 out = self._module.from_json(out)
@@ -164,9 +185,12 @@ class Cli:
                 out = str(out).strip()
 
             responses.append(out)
+
         return responses
 
     def send_config(self, commands):
+        conn = self._get_connection()
+
         multiline = False
         rc = 0
         for command in to_list(commands):
@@ -175,31 +199,26 @@ class Cli:
 
             if command.startswith('banner') or multiline:
                 multiline = True
-                command = self._module.jsonify({'command': command, 'sendonly': True})
             elif command == 'EOF' and multiline:
                 multiline = False
 
-            rc, out, err = self.exec_command(command)
-            if rc != 0:
-                return (rc, out, to_text(err, errors='surrogate_then_replace'))
-
-        return (rc, 'ok', '')
+            conn.get(command, None, None, multiline)
 
     def configure(self, commands):
         """Sends configuration commands to the remote device
         """
         conn = get_connection(self)
 
-        rc, out, err = self.exec_command('configure')
-        if rc != 0:
-            self._module.fail_json(msg='unable to enter configuration mode', output=to_text(err, errors='surrogate_then_replace'))
+        out = conn.get('configure')
 
-        rc, out, err = self.send_config(commands)
-        if rc != 0:
-            self.exec_command('abort')
-            self._module.fail_json(msg=to_text(err, errors='surrogate_then_replace'))
+        try:
+            self.send_config(commands)
+        except ConnectionError as exc:
+            conn.get('end')
+            message = getattr(exc, 'err', exc)
+            self._module.fail_json(msg="Error on executing commands %s" % commands, data=to_text(message, errors='surrogate_then_replace'))
 
-        self.exec_command('end')
+        conn.get('end')
         return {}
 
     def load_config(self, commands, commit=False, replace=False):
@@ -212,32 +231,37 @@ class Cli:
             pass
 
         if not all((bool(use_session), self.supports_sessions)):
-            return self.configure(self, commands)
+            if commit:
+                return self.configure(commands)
+            else:
+                self._module.warn("EOS can not check config without config session")
+                result = {'changed': True}
+                return result
 
-        conn = get_connection(self)
+        conn = self._get_connection()
         session = 'ansible_%s' % int(time.time())
         result = {'session': session}
 
-        rc, out, err = self.exec_command('configure session %s' % session)
-        if rc != 0:
-            self._module.fail_json(msg='unable to enter configuration mode', output=to_text(err, errors='surrogate_then_replace'))
+        out = conn.get('configure session %s' % session)
 
         if replace:
-            self.exec_command('rollback clean-config')
+            out = conn.get('rollback clean-config')
 
-        rc, out, err = self.send_config(commands)
-        if rc != 0:
-            self.exec_command('abort')
-            self._module.fail_json(msg=to_text(err, errors='surrogate_then_replace'), commands=commands)
+        try:
+            self.send_config(commands)
+        except ConnectionError as exc:
+            self.close_session(session)
+            message = getattr(exc, 'err', exc)
+            self._module.fail_json(msg="Error on executing commands %s" % commands, data=to_text(message, errors='surrogate_then_replace'))
 
-        rc, out, err = self.exec_command('show session-config diffs')
-        if rc == 0 and out:
+        out = conn.get('show session-config diffs')
+        if out:
             result['diff'] = to_text(out, errors='surrogate_then_replace').strip()
 
         if commit:
-            self.exec_command('commit')
+            conn.get('commit')
         else:
-            self.exec_command('abort')
+            self.close_session(session)
 
         return result
 
@@ -388,8 +412,19 @@ class Eapi:
         fallback to using configure() to load the commands.  If that happens,
         there will be no returned diff or session values
         """
-        if not self.supports_sessions:
-            return self.configure(self, config)
+        use_session = os.getenv('ANSIBLE_EOS_USE_SESSIONS', True)
+        try:
+            use_session = int(use_session)
+        except ValueError:
+            pass
+
+        if not all((bool(use_session), self.supports_sessions)):
+            if commit:
+                return self.configure(config)
+            else:
+                self._module.warn("EOS can not check config without config session")
+                result = {'changed': True}
+                return result
 
         session = 'ansible_%s' % int(time.time())
         result = {'session': session}

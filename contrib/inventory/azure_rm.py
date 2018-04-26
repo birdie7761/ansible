@@ -200,8 +200,6 @@ except ImportError:
     # python3
     import configparser as cp
 
-from packaging.version import Version
-
 from os.path import expanduser
 import ansible.module_utils.six.moves.urllib.parse as urlparse
 
@@ -620,6 +618,7 @@ class AzureInventory(object):
 
             # Add windows details
             if machine.os_profile is not None and machine.os_profile.windows_configuration is not None:
+                host_vars['ansible_connection'] = 'winrm'
                 host_vars['windows_auto_updates_enabled'] = \
                     machine.os_profile.windows_configuration.enable_automatic_updates
                 host_vars['windows_timezone'] = machine.os_profile.windows_configuration.time_zone
@@ -629,7 +628,7 @@ class AzureInventory(object):
                     if machine.os_profile.windows_configuration.win_rm.listeners is not None:
                         host_vars['windows_rm']['listeners'] = []
                         for listener in machine.os_profile.windows_configuration.win_rm.listeners:
-                            host_vars['windows_rm']['listeners'].append(dict(protocol=listener.protocol,
+                            host_vars['windows_rm']['listeners'].append(dict(protocol=listener.protocol.name,
                                                                              certificate_url=listener.certificate_url))
 
             for interface in machine.network_profile.network_interfaces:

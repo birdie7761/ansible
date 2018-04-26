@@ -29,6 +29,9 @@ version_added: "2.1"
 short_description: Tests reachability using ping from Nexus switch.
 description:
     - Tests reachability using ping from switch to a remote destination.
+    - For a general purpose network module, see the M(net_ping) module.
+    - For Windows targets, use the M(win_ping) module instead.
+    - For targets running Python, use the M(ping) module instead.
 author:
     - Jason Edelman (@jedelman8)
     - Gabriele Gerbino (@GGabriele)
@@ -40,23 +43,22 @@ options:
     count:
         description:
             - Number of packets to send.
-        required: false
         default: 2
     source:
         description:
             - Source IP Address.
-        required: false
-        default: null
     vrf:
         description:
             - Outgoing VRF.
-        required: false
-        default: null
     state:
         description:
             - Determines if the expected result is success or fail.
         choices: [ absent, present ]
         default: present
+notes:
+    - For a general purpose network module, see the M(net_ping) module.
+    - For Windows targets, use the M(win_ping) module instead.
+    - For targets running Python, use the M(ping) module instead.
 '''
 
 EXAMPLES = '''
